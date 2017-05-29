@@ -105,8 +105,8 @@ def main(to_reload=None):
     else: # train
         v = vae.VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
         v.train(mnist, max_iter=MAX_ITER, max_epochs=MAX_EPOCHS, cross_validate=False,
-                verbose=True, save=True, outdir=METAGRAPH_DIR, plots_outdir=PLOTS_DIR,
-                plot_latent_over_time=False)
+                verbose=True, save_final_state=True, outdir=METAGRAPH_DIR, plots_outdir=PLOTS_DIR,
+                plot_latent_over_time=False, save_summaries_every_n=100)
         print("Trained!")
 
     all_plots(v, mnist)
