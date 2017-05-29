@@ -28,7 +28,7 @@ class VAE():
     RESTORE_KEY = "to_restore"
 
     def __init__(self, architecture=[], d_hyperparams={}, meta_graph=None,
-                 save_graph_def=True, log_dir="./log"):
+                 log_dir="./log"):
         """(Re)build a symmetric VAE model with given:
 
             * architecture (list of nodes per encoder layer); e.g.
@@ -69,8 +69,11 @@ class VAE():
          self.x_reconstructed, self.z_, self.x_reconstructed_,
          self.cost, self.global_step, self.train_op) = handles
 
-        if save_graph_def: # tensorboard
-            self.logger = tf.summary.FileWriter(log_dir, self.sesh.graph)
+        # Merge all the summaries and create writers
+        # TODO put merging into _buildGraph ?
+        self.merged_summaries = tf.summary.merge_all()
+        self.train_writer = tf.summary.FileWriter(log_dir + '/train', self.sesh.graph)
+        self.test_writer = tf.summary.FileWriter(log_dir + '/test')
 
     @property
     def step(self):
@@ -152,6 +155,8 @@ class VAE():
 
     @staticmethod
     def crossEntropy(obs, actual, offset=1e-7):
+        # TODO: maybe use tf's cross entropy for stability?
+        # see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/examples/tutorials/mnist/mnist_with_summaries.py#L111-L124
         """Binary cross-entropy, per training example"""
         # (tf.Tensor, tf.Tensor, float) -> tf.Tensor
         with tf.name_scope("cross_entropy"):
@@ -210,11 +215,19 @@ class VAE():
         return self.decode(self.sampleGaussian(*self.encode(x)))
 
     def train(self, X, max_iter=np.inf, max_epochs=np.inf, cross_validate=True,
-              verbose=True, save=True, outdir="./out", plots_outdir="./png",
-              plot_latent_over_time=False):
-        if save:
+              verbose=True, save_final_state=True, outdir="./out", plots_outdir="./png",
+              plot_latent_over_time=False, save_summaries_every_n=None, **kwargs):
+
+        if 'save' in kwargs.keys():
+            raise TypeError("The `save` keyword was renamed to `save_final_state`!")
+        elif kwargs:
+            raise TypeError("train() got an unexpected keyword argument", kwargs.keys[0])
+
+        if save_final_state:
             saver = tf.train.Saver(tf.global_variables())
 
+        i = 0
+        avg_cost = None
         try:
             err_train = 0
             now = datetime.now().isoformat()[11:]
@@ -228,11 +241,22 @@ class VAE():
             while True:
                 x, _ = X.train.next_batch(self.batch_size)
                 feed_dict = {self.x_in: x, self.dropout_: self.dropout}
-                fetches = [self.x_reconstructed, self.cost, self.global_step, self.train_op]
-                x_reconstructed, cost, i, _ = self.sesh.run(fetches, feed_dict)
 
+                if save_summaries_every_n is not None and i % save_summaries_every_n == 0:
+                    # save a summary checkpoint
+                    fetches = [self.merged_summaries, self.x_reconstructed, self.cost,
+                               self.global_step, self.train_op]
+                    summary, x_reconstructed, cost, i, _ = self.sesh.run(fetches, feed_dict)
+                    self.test_writer.add_summary(summary, i)
+                else:  # no summary
+                    fetches = [self.x_reconstructed, self.cost, self.global_step, self.train_op]
+                    x_reconstructed, cost, i, _ = self.sesh.run(fetches, feed_dict)
+
+                # TODO why calculate average cost? isn't current cost much more informative?
                 err_train += cost
+                avg_cost = err_train / i
 
+                # TODO clean up this train / test / validation dataset mess and combine the % outputs
                 if plot_latent_over_time:
                     while int(round(BASE**pow_)) == i:
                         plot.exploreLatent(self, nx=30, ny=30, ppf=True, outdir=plots_outdir,
@@ -248,10 +272,10 @@ class VAE():
                         print("{}^{} = {}".format(BASE, pow_, i))
                         pow_ += INCREMENT
 
-                if i%1000 == 0 and verbose:
-                    print("round {} --> avg cost: ".format(i), err_train / i)
+                if i % 1000 == 0 and verbose:
+                    print("round {} --> avg cost: ".format(i), avg_cost)
 
-                if i%2000 == 0 and verbose:# and i >= 10000:
+                if i % 2000 == 0 and verbose:# and i >= 10000:
                     # visualize `n` examples of current minibatch inputs + reconstructions
                     plot.plotSubset(self, x, x_reconstructed, n=10, name="train",
                                     outdir=plots_outdir)
@@ -276,7 +300,7 @@ class VAE():
 
         finally:
             print("final avg cost (@ step {} = epoch {}): {}".format(
-                i, X.train.epochs_completed, err_train / i))
+                i, X.train.epochs_completed, avg_cost))
             now = datetime.now().isoformat()[11:]
 
             if save_final_state:
@@ -284,10 +308,11 @@ class VAE():
                     self.datetime, "_".join(map(str, self.architecture))))
                 print("Saving Variables in {} ...".format(outfile))
                 saver.save(self.sesh, outfile, global_step=self.step)
-            try:
-                self.logger.flush()
-                self.logger.close()
-            except AttributeError: # not logging
-                continue
+
+            if save_summaries_every_n is not None:
+                self.train_writer.flush()
+                self.train_writer.close()
+                self.test_writer.flush()
+                self.test_writer.close()
             print("... done!")
             print("------- Training end: {} -------\n".format(now))
