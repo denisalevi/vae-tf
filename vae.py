@@ -267,25 +267,27 @@ class VAE():
                                         outdir=plots_outdir)
 
                 if i >= max_iter or X.train.epochs_completed >= max_epochs:
-                    print("final avg cost (@ step {} = epoch {}): {}".format(
-                        i, X.train.epochs_completed, err_train / i))
-                    now = datetime.now().isoformat()[11:]
-                    print("------- Training end: {} -------\n".format(now))
-
-                    if save:
-                        outfile = os.path.join(os.path.abspath(outdir), "{}_vae_{}".format(
-                            self.datetime, "_".join(map(str, self.architecture))))
-                        saver.save(self.sesh, outfile, global_step=self.step)
-                    try:
-                        self.logger.flush()
-                        self.logger.close()
-                    except(AttributeError): # not logging
-                        continue
+                    print("... training finished!")
                     break
 
-        except(KeyboardInterrupt):
+        except KeyboardInterrupt:
+            print("... training interrupted!")
+            sys.exit(0)
+
+        finally:
             print("final avg cost (@ step {} = epoch {}): {}".format(
                 i, X.train.epochs_completed, err_train / i))
             now = datetime.now().isoformat()[11:]
+
+            if save_final_state:
+                outfile = os.path.join(os.path.abspath(outdir), "{}_vae_{}".format(
+                    self.datetime, "_".join(map(str, self.architecture))))
+                print("Saving Variables in {} ...".format(outfile))
+                saver.save(self.sesh, outfile, global_step=self.step)
+            try:
+                self.logger.flush()
+                self.logger.close()
+            except AttributeError: # not logging
+                continue
+            print("... done!")
             print("------- Training end: {} -------\n".format(now))
-            sys.exit(0)
