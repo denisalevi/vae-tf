@@ -40,6 +40,7 @@ def plotSubset(model, x_in, x_reconstructed, n=10, cols=None, outlines=True,
         title = "{}_batch_{}_round_{}_{}.png".format(
             model.datetime, "_".join(map(str, model.architecture)), model.step, name)
         plt.savefig(os.path.join(outdir, title), bbox_inches="tight")
+        plt.close()
 
 
 def plotInLatent(model, x_in, labels=[], range_=None, title=None,
@@ -121,6 +122,7 @@ def exploreLatent(model, nx=20, ny=20, range_=(-4, 4), ppf=False,
         title = "{}_latent_{}_round_{}_{}.png".format(
             model.datetime, "_".join(map(str, model.architecture)), model.step, name)
         plt.savefig(os.path.join(outdir, title), bbox_inches="tight")
+        plt.close()
 
 
 def interpolate(model, latent_1, latent_2, n=20, save=True, name="interpolate", outdir="."):
@@ -142,6 +144,7 @@ def interpolate(model, latent_1, latent_2, n=20, save=True, name="interpolate", 
         title = "{}_latent_{}_round_{}_{}".format(
             model.datetime, "_".join(map(str, model.architecture)), model.step, name)
         plt.savefig(os.path.join(outdir, title), bbox_inches="tight")
+        plt.close()
 
 
 def justMNIST(x, save=True, name="digit", outdir="."):
@@ -159,6 +162,7 @@ def justMNIST(x, save=True, name="digit", outdir="."):
     if save:
         title = "mnist_{}.png".format(name)
         plt.savefig(os.path.join(outdir, title), bbox_inches="tight")
+        plt.close()
 
 
 def morph(model, zs, n_per_morph=10, loop=True, save=True, name="morph", outdir="."):
@@ -201,3 +205,4 @@ def morph(model, zs, n_per_morph=10, loop=True, save=True, name="morph", outdir=
                 model.datetime, "_".join(map(str, model.architecture)),
                 model.step, name, i)
             plt.savefig(os.path.join(outdir, title), bbox_inches="tight")
+            plt.close()
