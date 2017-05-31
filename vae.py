@@ -72,8 +72,14 @@ class VAE():
         # Merge all the summaries and create writers
         # TODO put merging into _buildGraph ?
         self.merged_summaries = tf.summary.merge_all()
-        self.train_writer = tf.summary.FileWriter(log_dir + '/train', self.sesh.graph)
-        self.test_writer = tf.summary.FileWriter(log_dir + '/test')
+        log_dir = os.path.join(os.path.abspath(log_dir), "{}_vae_{}".format(
+            self.datetime, "_".join(map(str, self.architecture))))
+        print("Saving tensorBoard summaries in {}".format(log_dir))
+        self.train_writer = tf.summary.FileWriter(
+            os.path.join(log_dir, 'train'),
+            self.sesh.graph)
+        self.validation_writer = tf.summary.FileWriter(
+            os.path.join(log_dir, 'validation'))
 
     @property
     def step(self):
@@ -270,7 +276,7 @@ class VAE():
                     fetches = [self.merged_summaries, self.x_reconstructed, self.cost,
                                self.global_step, self.train_op]
                     summary, x_reconstructed, cost, i, _ = self.sesh.run(fetches, feed_dict)
-                    self.test_writer.add_summary(summary, i)
+                    self.train_writer.add_summary(summary, i)
                 else:  # no summary
                     fetches = [self.x_reconstructed, self.cost, self.global_step, self.train_op]
                     x_reconstructed, cost, i, _ = self.sesh.run(fetches, feed_dict)
@@ -335,7 +341,7 @@ class VAE():
             if save_summaries_every_n is not None:
                 self.train_writer.flush()
                 self.train_writer.close()
-                self.test_writer.flush()
-                self.test_writer.close()
+                self.validation_writer.flush()
+                self.validation_writer.close()
             print("... done!")
             print("------- Training end: {} -------\n".format(now))
