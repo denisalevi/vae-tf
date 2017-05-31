@@ -310,13 +310,19 @@ class VAE():
                                     outdir=plots_outdir)
 
                     if cross_validate:
-                        x, _ = X.validation.next_batch(self.batch_size)
-                        feed_dict = {self.x_in: x}
-                        fetches = [self.x_reconstructed, self.cost]
-                        x_reconstructed, cost = self.sesh.run(fetches, feed_dict)
-
-                        print("round {} --> CV cost: ".format(i), cost)
-                        plot.plotSubset(self, x, x_reconstructed, n=10, name="cv",
+                        # TODO change validation batch num / size / intervall if data less equal distributed
+                        num_batches_validation = 1
+                        validation_cost = 0
+                        for n in range(num_batches_validation):
+                            x, _ = X.validation.next_batch(self.batch_size)
+                            feed_dict = {self.x_in: x}
+                            fetches = [self.merged_summaries, self.x_reconstructed, self.cost]
+                            summary, x_reconstructed, cost = self.sesh.run(fetches, feed_dict)
+                            validation_cost += cost
+                        validation_cost /= num_batches_validation
+                        self.validation_writer.add_summary(summary, i)
+                        print("round {} --> validation cost: ".format(i), validation_cost)
+                        plot.plotSubset(self, x, x_reconstructed, n=10, name="cross_validation",
                                         outdir=plots_outdir)
 
                 if i >= max_iter or X.train.epochs_completed >= max_epochs:
