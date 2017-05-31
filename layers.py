@@ -21,12 +21,14 @@ class Dense():
             if not hasattr(self, 'w'):  # initialize weights first time
                 self.w, self.b = self.wbVars(x.get_shape()[1].value, self.size)
                 self.w = tf.nn.dropout(self.w, self.dropout)
-            activation = self.nonlinearity(tf.matmul(x, self.w) + self.b)
+            neuron_input = tf.add(tf.matmul(x, self.w), self.b, name='neuron_inputs')
+            activation = self.nonlinearity(neuron_input, name='activations')
             if self.summarize_params:
-                with tf.name_scope('weights'):
-                    variable_summaries(self.w)
-                with tf.name_scope('bias'):
-                    variable_summaries(self.b)
+                with tf.name_scope('summaries'):
+                    variable_summaries(self.w, 'weights')
+                    variable_summaries(self.b, 'biases')
+                    variable_summaries(neuron_input, 'neuron_inputs')
+                    variable_summaries(activation, 'activations')
         return activation
 
     @staticmethod
