@@ -243,22 +243,22 @@ class VAE():
         # np.array -> np.array
         return self.decode(self.sampleGaussian(*self.encode(x)))
 
-    def train(self, X, max_iter=np.inf, max_epochs=np.inf, cross_validate=True,
+    def train(self, X, max_iter=np.inf, max_epochs=np.inf, cross_validate_every_n=None,
               verbose=True, save_final_state=True, outdir="./out", plots_outdir="./png",
-              plot_latent_over_time=False, save_summaries_every_n=None, **kwargs):
+              plot_latent_over_time=False, plot_subsets_every_n=None,
+              save_summaries_every_n=None, **kwargs):
 
         if 'save' in kwargs.keys():
             raise TypeError("The `save` keyword was renamed to `save_final_state`!")
         elif kwargs:
-            raise TypeError("train() got an unexpected keyword argument {}".format(list(kwargs.keys())[0]))
+            raise TypeError("train() got an unexpected keyword argument: {}".format(list(kwargs.keys())[0]))
 
         if save_final_state:
             saver = tf.train.Saver(tf.global_variables())
 
-        i = 0
+        i_batch = 0
         avg_cost = None
         try:
-            err_train = 0
             now = datetime.now().isoformat()[11:]
             print("------- Training begin: {} -------\n".format(now))
 
@@ -268,26 +268,56 @@ class VAE():
                 pow_ = 0
 
             while True:
+                i_since_last_print = 0
+                err_train = 0
                 x, _ = X.train.next_batch(self.batch_size)
                 feed_dict = {self.x_in: x, self.dropout_: self.dropout}
 
-                if save_summaries_every_n is not None and i % save_summaries_every_n == 0:
+                ### TRAINING
+                if save_summaries_every_n is not None and i_batch % save_summaries_every_n == 0:
                     # save a summary checkpoint
                     fetches = [self.merged_summaries, self.x_reconstructed, self.cost,
                                self.global_step, self.train_op]
-                    summary, x_reconstructed, cost, i, _ = self.sesh.run(fetches, feed_dict)
-                    self.train_writer.add_summary(summary, i)
+                    summary, x_reconstructed, cost, i_batch, _ = self.sesh.run(fetches, feed_dict)
+                    self.train_writer.add_summary(summary, i_batch)
                 else:  # no summary
                     fetches = [self.x_reconstructed, self.cost, self.global_step, self.train_op]
-                    x_reconstructed, cost, i, _ = self.sesh.run(fetches, feed_dict)
-
+                    x_reconstructed, cost, i_batch, _ = self.sesh.run(fetches, feed_dict)
                 # TODO why calculate average cost? isn't current cost much more informative?
                 err_train += cost
-                avg_cost = err_train / i
+                i_since_last_print += 1
+                avg_cost = err_train / i_since_last_print
+                if verbose and i_batch % 1000 == 0:
+                    # print average cost since last print
+                    print("batch {} (epoch {}) --> cost (avg since last report): {}"
+                          "".format(i_batch, X.train.epochs_completed, avg_cost))
 
-                # TODO clean up this train / test / validation dataset mess and combine the % outputs
+                ### VALIDATION
+                if cross_validate_every_n is not None and i_batch % cross_validate_every_n == 0:
+                    # TODO change validation batch num / size / intervall if data less equal distributed
+                    num_batches_validation = 1
+                    validation_cost = 0
+                    for n in range(num_batches_validation):
+                        x, _ = X.validation.next_batch(self.batch_size)
+                        feed_dict = {self.x_in: x}
+                        fetches = [self.merged_summaries, self.x_reconstructed, self.cost]
+                        summary, x_reconstructed, cost = self.sesh.run(fetches, feed_dict)
+                        validation_cost += cost
+                    validation_cost /= num_batches_validation
+                    self.validation_writer.add_summary(summary, i_batch)
+                    if verbose:
+                        print("batch {} --> validation cost: {}".format(i_batch, validation_cost))
+                    if plot_subsets_every_n is not None:
+                        plot.plotSubset(self, x, x_reconstructed, n=10, name="cross validation",
+                                        outdir=plots_outdir)
+
+                ### PLOTTING
+                if plot_subsets_every_n is not None and i_batch % plot_subsets_every_n == 0:
+                    # visualize `n` examples of current minibatch inputs + reconstructions
+                    plot.plotSubset(self, x, x_reconstructed, n=10, name="train",
+                                    outdir=plots_outdir)
                 if plot_latent_over_time:
-                    while int(round(BASE**pow_)) == i:
+                    while int(round(BASE**pow_)) == i_batch:  # logarithmic time
                         plot.exploreLatent(self, nx=30, ny=30, ppf=True, outdir=plots_outdir,
                                            name="explore_ppf30_{}".format(pow_))
 
@@ -298,34 +328,10 @@ class VAE():
                                               (-6, 6), title=name, outdir=plots_outdir,
                                               name="{}_{}".format(name, pow_))
 
-                        print("{}^{} = {}".format(BASE, pow_, i))
+                        print("{}^{} = {}".format(BASE, pow_, i_batch))
                         pow_ += INCREMENT
 
-                if i % 1000 == 0 and verbose:
-                    print("round {} --> avg cost: ".format(i), avg_cost)
-
-                if i % 2000 == 0 and verbose:# and i >= 10000:
-                    # visualize `n` examples of current minibatch inputs + reconstructions
-                    plot.plotSubset(self, x, x_reconstructed, n=10, name="train",
-                                    outdir=plots_outdir)
-
-                    if cross_validate:
-                        # TODO change validation batch num / size / intervall if data less equal distributed
-                        num_batches_validation = 1
-                        validation_cost = 0
-                        for n in range(num_batches_validation):
-                            x, _ = X.validation.next_batch(self.batch_size)
-                            feed_dict = {self.x_in: x}
-                            fetches = [self.merged_summaries, self.x_reconstructed, self.cost]
-                            summary, x_reconstructed, cost = self.sesh.run(fetches, feed_dict)
-                            validation_cost += cost
-                        validation_cost /= num_batches_validation
-                        self.validation_writer.add_summary(summary, i)
-                        print("round {} --> validation cost: ".format(i), validation_cost)
-                        plot.plotSubset(self, x, x_reconstructed, n=10, name="cross_validation",
-                                        outdir=plots_outdir)
-
-                if i >= max_iter or X.train.epochs_completed >= max_epochs:
+                if i_batch >= max_iter or X.train.epochs_completed >= max_epochs:
                     print("... training finished!")
                     break
 
@@ -334,8 +340,8 @@ class VAE():
             sys.exit(0)
 
         finally:
-            print("final avg cost (@ step {} = epoch {}): {}".format(
-                i, X.train.epochs_completed, avg_cost))
+            print("final cost (@ step {} = epoch {}): {}".format(
+                i_batch, X.train.epochs_completed, avg_cost))
             now = datetime.now().isoformat()[11:]
 
             if save_final_state:

@@ -26,7 +26,7 @@ HYPERPARAMS = {
     "squashing": tf.nn.sigmoid
 }
 
-MAX_ITER = 2000#2**16
+MAX_ITER = np.inf#2000#2**16
 MAX_EPOCHS = np.inf
 
 LOG_DIR = "./log"
@@ -104,9 +104,9 @@ def main(to_reload=None):
 
     else: # train
         v = vae.VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
-        v.train(mnist, max_iter=MAX_ITER, max_epochs=MAX_EPOCHS, cross_validate=False,
+        v.train(mnist, max_iter=MAX_ITER, max_epochs=MAX_EPOCHS, cross_validate_every_n=2000,
                 verbose=True, save_final_state=True, outdir=METAGRAPH_DIR, plots_outdir=PLOTS_DIR,
-                plot_latent_over_time=False, save_summaries_every_n=100)
+                plot_latent_over_time=True, plot_subsets_every_n=2000, save_summaries_every_n=100)
         print("Trained!")
 
     all_plots(v, mnist)
