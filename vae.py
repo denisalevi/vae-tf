@@ -66,7 +66,7 @@ class VAE():
 
         # unpack handles for tensor ops to feed or fetch
         (self.x_in, self.dropout_, self.z_mean, self.z_log_sigma,
-         self.x_reconstructed, self.z_, self.x_reconstructed_,
+         self.x_reconstructed, self.z_in, self.x_decoded,
          self.cost, self.global_step, self.train_op) = handles
 
         # Merge all the summaries and create writers
@@ -85,34 +85,35 @@ class VAE():
                                                  self.architecture[0]], name="x")
         dropout = tf.placeholder_with_default(1., shape=[], name="dropout")
 
+        hidden_layers = self.architecture[1: -1]
         # encoding / "recognition": q(z|x)
-        encoding = [Dense("encoding", hidden_size, dropout, self.nonlinearity)
-                    # hidden layers reversed for function composition: outer -> inner
-                    for hidden_size in reversed(self.architecture[1:-1])]
-        h_encoded = composeAll(encoding)(x_in)
+        with tf.name_scope("encoding"):
+            encoding = [Dense("dense{}".format(len(hidden_layers) - (n + 1)), hidden_size, dropout, self.nonlinearity)
+                        # hidden layers reversed for function composition: outer -> inner
+                        for n, hidden_size in enumerate(reversed(hidden_layers))]
+            h_encoded = composeAll(encoding)(x_in)
+        #h_encoded = tf.identity(h_encoded, name="x_encoded")
 
         # latent distribution parameterized by hidden encoding
         # z ~ N(z_mean, np.exp(z_log_sigma)**2)
-        z_mean = Dense("z_mean", self.architecture[-1], dropout)(h_encoded)
-        z_log_sigma = Dense("z_log_sigma", self.architecture[-1], dropout)(h_encoded)
+        with tf.name_scope("sample_latent"):
+            z_mean = Dense("z_mean", self.architecture[-1], dropout)(h_encoded)
+            z_log_sigma = Dense("z_log_sigma", self.architecture[-1], dropout)(h_encoded)
 
-        # kingma & welling: only 1 draw necessary as long as minibatch large enough (>100)
-        z = self.sampleGaussian(z_mean, z_log_sigma)
+            # kingma & welling: only 1 draw necessary as long as minibatch large enough (>100)
+            z = self.sampleGaussian(z_mean, z_log_sigma)
 
         # decoding / "generative": p(x|z)
-        decoding = [Dense("decoding", hidden_size, dropout, self.nonlinearity)
-                    for hidden_size in self.architecture[1:-1]] # assumes symmetry
+        decoding = [Dense("dense{}".format(len(hidden_layers) - (n + 1)), hidden_size, dropout, self.nonlinearity)
+                    for n, hidden_size in enumerate(hidden_layers)] # assumes symmetry
         # final reconstruction: restore original dims, squash outputs [0, 1]
-        decoding.insert(0, Dense( # prepend as outermost function
-            "x_decoding", self.architecture[0], dropout, self.squashing))
-        x_reconstructed = tf.identity(composeAll(decoding)(z), name="x_reconstructed")
+        # prepend as outermost function
+        decoding.insert(0, Dense("dense{}".format(len(hidden_layers)),
+                                 self.architecture[0], dropout, self.squashing))
 
-        # reconstruction loss: mismatch b/w x & x_reconstructed
-        # binary cross-entropy -- assumes x & p(x|z) are iid Bernoullis
-        rec_loss = VAE.crossEntropy(x_reconstructed, x_in)
-
-        # Kullback-Leibler divergence: mismatch b/w approximate vs. imposed/true posterior
-        kl_loss = VAE.kullbackLeibler(z_mean, z_log_sigma)
+        with tf.name_scope("reconstructing"):
+            x_reconstructed = composeAll(decoding)(z)
+        #x_reconstructed = tf.identity(x_reconstructed, name="x_reconstructed")
 
         with tf.name_scope("l2_regularization"):
             regularizers = [tf.nn.l2_loss(var) for var in self.sesh.graph.get_collection(
@@ -120,9 +121,26 @@ class VAE():
             l2_reg = self.lambda_l2_reg * tf.add_n(regularizers)
 
         with tf.name_scope("cost"):
+            # reconstruction loss: mismatch b/w x & x_reconstructed
+            # binary cross-entropy -- assumes x & p(x|z) are iid Bernoullis
+            rec_loss = tf.reduce_mean(VAE.crossEntropy(x_reconstructed, x_in))
+            tf.summary.scalar('reconstruction_loss', rec_loss)
+
+            # Kullback-Leibler divergence: mismatch b/w approximate vs. imposed/true posterior
+            kl_loss = tf.reduce_mean(VAE.kullbackLeibler(z_mean, z_log_sigma))
+            tf.summary.scalar('KL_loss', kl_loss)
+
             # average over minibatch
-            cost = tf.reduce_mean(rec_loss + kl_loss, name="vae_cost")
+            cost = tf.add(rec_loss, kl_loss)
+            tf.summary.scalar('vae_cost', cost)
             cost += l2_reg
+            tf.summary.scalar('regularized_cost', cost)
+
+            # first add then reduce_mean
+            #rec_loss = VAE.crossEntropy(x_reconstructed, x_in)
+            #kl_loss = VAE.kullbackLeibler(z_mean, z_log_sigma)
+            #cost = tf.reduce_mean(rec_loss + kl_loss, name="vae_cost")
+            #cost += l2_reg
 
         # optimization
         global_step = tf.Variable(0, trainable=False)
@@ -138,13 +156,18 @@ class VAE():
         # ops to directly explore latent space
         # defaults to prior z ~ N(0, I)
         with tf.name_scope("latent_in"):
-            z_ = tf.placeholder_with_default(tf.random_normal([1, self.architecture[-1]]),
-                                            shape=[None, self.architecture[-1]],
-                                            name="latent_in")
-        x_reconstructed_ = composeAll(decoding)(z_)
+            z_in = tf.placeholder_with_default(tf.random_normal([1, self.architecture[-1]]),
+                                             shape=[None, self.architecture[-1]],
+                                             name="latent_in")
+        with tf.name_scope("decoding"):
+            for dense_layer in decoding:
+                # don't summarize params when decoding latent_in
+                dense_layer.summarize_params = False
+            x_decoded = composeAll(decoding)(z_in)
+        #x_decoded = tf.identity(x_decoded, name="x_decoded")
 
         return (x_in, dropout, z_mean, z_log_sigma, x_reconstructed,
-                z_, x_reconstructed_, cost, global_step, train_op)
+                z_in, x_decoded, cost, global_step, train_op)
 
     def sampleGaussian(self, mu, log_sigma):
         """(Differentiably!) draw sample from Gaussian with given shape, subject to random noise epsilon"""
@@ -205,9 +228,9 @@ class VAE():
         if zs is not None:
             is_tensor = lambda x: hasattr(x, "eval")
             zs = (self.sesh.run(zs) if is_tensor(zs) else zs) # coerce to np.array
-            feed_dict.update({self.z_: zs})
+            feed_dict.update({self.z_in: zs})
         # else, zs defaults to draw from conjugate prior z ~ N(0, I)
-        return self.sesh.run(self.x_reconstructed_, feed_dict=feed_dict)
+        return self.sesh.run(self.x_decoded, feed_dict=feed_dict)
 
     def vae(self, x):
         """End-to-end autoencoder"""
@@ -221,7 +244,7 @@ class VAE():
         if 'save' in kwargs.keys():
             raise TypeError("The `save` keyword was renamed to `save_final_state`!")
         elif kwargs:
-            raise TypeError("train() got an unexpected keyword argument", kwargs.keys[0])
+            raise TypeError("train() got an unexpected keyword argument {}".format(list(kwargs.keys())[0]))
 
         if save_final_state:
             saver = tf.train.Saver(tf.global_variables())
