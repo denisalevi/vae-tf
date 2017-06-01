@@ -5,6 +5,7 @@ import sys
 
 import numpy as np
 import tensorflow as tf
+from tensorflow.contrib.tensorboard.plugins import projector
 
 from layers import Dense
 import plot
@@ -71,16 +72,15 @@ class VAE():
          self.cost, self.global_step, self.train_op) = handles
 
         # Merge all the summaries and create writers
-        # TODO put merging into _buildGraph ?
         self.merged_summaries = tf.summary.merge_all()
-        log_dir = os.path.join(os.path.abspath(log_dir), "{}_vae_{}".format(
+        self.log_dir = os.path.join(os.path.abspath(log_dir), "{}_vae_{}".format(
             self.datetime, "_".join(map(str, self.architecture))))
-        print("Saving tensorBoard summaries in {}".format(log_dir))
+        print("Saving tensorBoard summaries in {}".format(self.log_dir))
         self.train_writer = tf.summary.FileWriter(
-            os.path.join(log_dir, 'train'),
+            os.path.join(self.log_dir, 'train'),
             self.sesh.graph)
         self.validation_writer = tf.summary.FileWriter(
-            os.path.join(log_dir, 'validation'))
+            os.path.join(self.log_dir, 'validation'))
 
     @property
     def step(self):
@@ -183,6 +183,70 @@ class VAE():
             epsilon = tf.random_normal(tf.shape(log_sigma), name="epsilon")
             return mu + epsilon * tf.exp(log_sigma) # N(mu, I * sigma**2)
 
+    def create_embedding(self, dataset, labels=None, label_names=None,
+                         sample_latent=True, input_space=True):
+        """dataset.shape = (num_items, item_dimension)
+        labels.shape = (num_items, num_labels)
+        label_names = list"""
+        if labels is not None:
+            assert dataset.shape[0] == labels.shape[0]
+        # Create randomly initialized embedding weights which will be trained.
+        #N = 10000 # Number of items (vocab size).
+        #D = 200 # Dimensionality of the embedding.
+        # number of items
+        num_items = dataset.shape[0]
+        dim_latent = self.architecture[-1]
+
+        projector_dir = os.path.join(self.log_dir, 'projector')
+        summary_writer = tf.summary.FileWriter(projector_dir)
+
+        # encode dataset
+        mus, sigmas = self.encode(dataset)
+        if sample_latent:
+            emb = self.sesh.run(self.sampleGaussian(mus, sigmas))
+        else:
+            emb = mus
+
+        emb_var_latent = tf.Variable(emb,
+                                     name='embedding_latent_sampled' if sample_latent else 'embedding_latent',
+                                     trainable=False)
+        self.embedding_vars = [emb_var_latent]
+        if input_space:
+            emb_var_input = tf.Variable(dataset, name='embedding_intput', trainable=False)
+            self.embedding_vars.append(emb_var_input)
+
+        # since we create the embedding after training, we need to initialize the vars
+        tf.variables_initializer(self.embedding_vars).run(session=self.sesh)
+
+        # Format: tensorflow/contrib/tensorboard/plugins/projector/projector_config.proto
+        config = projector.ProjectorConfig()
+
+        embedding_latent = config.embeddings.add()
+        embedding_latent.tensor_name = emb_var_latent.name
+        if input_space:
+            embedding_input = config.embeddings.add()
+            embedding_input.tensor_name = emb_var_input.name
+
+        # create metadata file
+        if labels is not None:
+            header = ''
+            if labels.ndim > 1:
+                if label_names is None:
+                    label_names = ['label{}'.format(n) for n in range(labels.shape[1])]
+                header = '\t'.join(label_names)
+            metadata_file = os.path.join(projector_dir, 'metadata.tsv')
+            np.savetxt(metadata_file, labels, delimiter='/t', header=header)
+
+            # Link this tensor to its metadata file (e.g. labels).
+            embedding_latent.metadata_path = metadata_file
+            if input_space:
+                embedding_input.metadata_path = metadata_file
+
+        # The next line writes a projector_config.pbtxt in the projector_dir. TensorBoard will
+        # read this file during startup.
+        projector.visualize_embeddings(summary_writer, config)
+        print("CREATED EMBEDDING")
+
     @staticmethod
     def crossEntropy(obs, actual, offset=1e-7):
         # TODO: maybe use tf's cross entropy for stability?
@@ -246,16 +310,13 @@ class VAE():
 
     def train(self, X, max_iter=np.inf, max_epochs=np.inf, cross_validate_every_n=None,
               verbose=True, save_final_state=True, outdir="./out", plots_outdir="./png",
-              plot_latent_over_time=False, plot_subsets_every_n=None,
+              plot_latent_over_time=False, plot_subsets_every_n=None, save_embedding=True,
               save_summaries_every_n=None, **kwargs):
 
         if 'save' in kwargs.keys():
             raise TypeError("The `save` keyword was renamed to `save_final_state`!")
         elif kwargs:
             raise TypeError("train() got an unexpected keyword argument: {}".format(list(kwargs.keys())[0]))
-
-        if save_final_state:
-            saver = tf.train.Saver(tf.global_variables())
 
         i_batch = 0
         avg_cost = None
@@ -345,10 +406,18 @@ class VAE():
                 i_batch, X.train.epochs_completed, avg_cost))
             now = datetime.now().isoformat()[11:]
 
+            if save_embedding:
+                self.create_embedding(X.train.images, labels=X.train.labels)
+
             if save_final_state:
-                outfile = os.path.join(os.path.abspath(outdir), "{}_vae_{}".format(
-                    self.datetime, "_".join(map(str, self.architecture))))
-                print("Saving Variables in {} ...".format(outfile))
+                saver = tf.train.Saver(tf.global_variables())
+                outfile = os.path.join(os.path.abspath(self.log_dir), "final_checkpoint")
+                print("Saving Variables in {}".format(self.log_dir))
+                saver.save(self.sesh, outfile, global_step=self.step)
+            elif save_embedding:
+                saver = tf.train.Saver(self.embedding_vars)
+                outfile = os.path.join(self.log_dir, "embedding_checkpoint")
+                print("Saving checkpoint for embeddings in {}".format(self.log_dir))
                 saver.save(self.sesh, outfile, global_step=self.step)
 
             if save_summaries_every_n is not None:
