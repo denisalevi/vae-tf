@@ -54,7 +54,8 @@ class VAE():
 
         else: # restore saved model
             model_datetime, model_name = os.path.basename(meta_graph).split("_vae_")
-            self.datetime = "{}_reloaded".format(model_datetime)
+            #self.datetime = "{}_reloaded".format(model_datetime)
+            self.datetime = model_datetime
             *model_architecture, _ = re.split("_|-", model_name)
             self.architecture = [int(n) for n in model_architecture]
 
