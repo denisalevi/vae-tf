@@ -47,6 +47,9 @@ class VAE():
             assert len(self.architecture) > 2, \
                 "Architecture must have more layers! (input, 1+ hidden, latent)"
 
+            self.log_dir = os.path.join(os.path.abspath(log_dir), "{}_vae_{}".format(
+                self.datetime, "_".join(map(str, self.architecture))))
+
             # build graph
             handles = self._buildGraph()
             for handle in handles:
@@ -54,10 +57,34 @@ class VAE():
             self.sesh.run(tf.global_variables_initializer())
 
         else: # restore saved model
-            model_datetime, model_name = os.path.basename(meta_graph).split("_vae_")
-            #self.datetime = "{}_reloaded".format(model_datetime)
+            # assuming meta_graph is the checkpoint file located in the models self.log_dir
+            log_dir = os.path.dirname(os.path.realpath(meta_graph))
+            prefix, model_name = os.path.basename(log_dir).split("_vae_")
+            prefix_split = prefix.split("_reloaded")
+            # when reloaded, the new log_dir will be
+            # {datetime}_reloaded_{X}_{Y}_vae_{architecture} where X gets
+            # incremented everytime a new reload is performed (indicating the source log dir)
+            # and Y gets incremented when the folder already existst (making it unique)
+            if len(prefix_split) == 1:
+                source_idx = -1
+            else:
+                source_idx = int(prefix_split[1].split("_")[1])
+            model_datetime = prefix_split[0]
+            source_idx += 1
+            unique_idx = 0
+            while True:
+                self.log_dir = os.path.join(os.path.join(log_dir, ".."),
+                                            "{}_reloaded_{}_{}_vae_{}".format(
+                                                model_datetime,
+                                                source_idx,
+                                                unique_idx,
+                                                model_name)
+                                           )
+                if not os.path.isdir(self.log_dir):
+                    break
+                unique_idx += 1
             self.datetime = model_datetime
-            *model_architecture, _ = re.split("_|-", model_name)
+            model_architecture = re.split("_|-", model_name)
             self.architecture = [int(n) for n in model_architecture]
 
             # rebuild graph
@@ -73,8 +100,6 @@ class VAE():
 
         # Merge all the summaries and create writers
         self.merged_summaries = tf.summary.merge_all()
-        self.log_dir = os.path.join(os.path.abspath(log_dir), "{}_vae_{}".format(
-            self.datetime, "_".join(map(str, self.architecture))))
         print("Saving tensorBoard summaries in {}".format(self.log_dir))
         self.train_writer_dir = os.path.join(self.log_dir, 'train')
         self.validation_writer_dir = os.path.join(self.log_dir, 'validation')
@@ -187,17 +212,13 @@ class VAE():
         """dataset.shape = (num_items, item_dimension)
         labels.shape = (num_items, num_labels)
         label_names = list"""
+
         if labels is not None:
             assert dataset.shape[0] == labels.shape[0]
         if not latent_space and not input_space:
             print("WARNING VAE.create_embedding called with input_space=False"
                   "and latent_space=False. No embedding created.")
-        # Create randomly initialized embedding weights which will be trained.
-        #N = 10000 # Number of items (vocab size).
-        #D = 200 # Dimensionality of the embedding.
-        # number of items
-        num_items = dataset.shape[0]
-        dim_latent = self.architecture[-1]
+            return
 
         # encode dataset
         mus, sigmas = self.encode(dataset)
@@ -382,7 +403,7 @@ class VAE():
                     if verbose:
                         print("batch {} --> validation cost: {}".format(i_batch, validation_cost))
                     if plot_subsets_every_n is not None:
-                        plot.plotSubset(self, x, x_reconstructed, n=10, name="cross validation",
+                        plot.plotSubset(self, x, x_reconstructed, n=10, name="cross_validation",
                                         outdir=plots_outdir)
 
                 ### PLOTTING
@@ -423,10 +444,7 @@ class VAE():
                                   input_space=save_input_embedding)
 
             if save_final_state:
-                saver = tf.train.Saver(tf.global_variables())
-                outfile = os.path.join(os.path.abspath(self.log_dir), "final_checkpoint")
-                print("Saving Variables in {}".format(self.log_dir))
-                saver.save(self.sesh, outfile, global_step=self.step)
+                self.save_final_checkpoint()
             elif save_embedding:
                 saver = tf.train.Saver(self.embedding_vars)
                 outfile = os.path.join(self.log_dir, "embedding_checkpoint")
@@ -440,3 +458,10 @@ class VAE():
                 self.validation_writer.close()
             print("... done!")
             print("------- Training end: {} -------\n".format(now))
+
+    def save_final_checkpoint(self):
+        saver = tf.train.Saver(tf.global_variables())
+        self.final_checkpoint = os.path.join(os.path.abspath(self.log_dir), "final_checkpoint")
+        print("Saving Variables in {}".format(self.log_dir))
+        outfile = saver.save(self.sesh, self.final_checkpoint, global_step=self.step)
+        return outfile
