@@ -30,7 +30,6 @@ MAX_ITER = np.inf#2000#2**16
 MAX_EPOCHS = np.inf
 
 LOG_DIR = "./log"
-METAGRAPH_DIR = "./out"
 PLOTS_DIR = "./png"
 
 
@@ -105,8 +104,9 @@ def main(to_reload=None):
     else: # train
         v = vae.VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
         v.train(mnist, max_iter=MAX_ITER, max_epochs=MAX_EPOCHS, cross_validate_every_n=2000,
-                verbose=True, save_final_state=True, outdir=METAGRAPH_DIR, plots_outdir=PLOTS_DIR,
-                plot_latent_over_time=True, plot_subsets_every_n=2000, save_summaries_every_n=100)
+                verbose=True, save_final_state=True, plots_outdir=PLOTS_DIR,
+                plot_latent_over_time=False, plot_subsets_every_n=2000, save_summaries_every_n=100,
+                save_input_embedding=False, save_latent_embedding=True)
         print("Trained!")
 
     all_plots(v, mnist)
@@ -115,14 +115,14 @@ def main(to_reload=None):
 if __name__ == "__main__":
     tf.reset_default_graph()
 
-    for DIR in (LOG_DIR, METAGRAPH_DIR, PLOTS_DIR):
+    for DIR in (LOG_DIR, PLOTS_DIR):
         try:
             os.mkdir(DIR)
-        except(FileExistsError):
+        except FileExistsError:
             pass
 
     try:
         to_reload = sys.argv[1]
         main(to_reload=to_reload)
-    except(IndexError):
+    except IndexError:
         main()
