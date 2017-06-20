@@ -105,9 +105,10 @@ def main(to_reload=None):
         v = vae.VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
         v.train(mnist, max_iter=MAX_ITER, max_epochs=MAX_EPOCHS, cross_validate_every_n=2000,
                 verbose=True, save_final_state=True, plots_outdir=PLOTS_DIR,
-                plot_latent_over_time=False, plot_subsets_every_n=2000, save_summaries_every_n=100,
-                save_input_embedding=False, save_latent_embedding=True)
-        print("Trained!")
+                plot_latent_over_time=False, plot_subsets_every_n=2000, save_summaries_every_n=100)
+        v.create_embedding(mnist.test.images, labels=mnist.test.labels, label_names=None,
+                           sample_latent=True, latent_space=True, input_space=True,
+                           image_dims=(28, 28))
 
     all_plots(v, mnist)
 

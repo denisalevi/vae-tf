@@ -2,6 +2,7 @@ from datetime import datetime
 import os
 import re
 import sys
+import scipy
 
 import numpy as np
 import tensorflow as tf
@@ -9,7 +10,7 @@ from tensorflow.contrib.tensorboard.plugins import projector
 
 from layers import Dense
 import plot
-from utils import composeAll, print_
+from utils import composeAll, print_, images_to_sprite
 
 
 class VAE():
@@ -38,11 +39,11 @@ class VAE():
 
             * hyperparameters (optional dictionary of updates to `DEFAULTS`)
         """
-        self.architecture = architecture
         self.__dict__.update(VAE.DEFAULTS, **d_hyperparams)
         self.sesh = tf.Session()
 
         if not meta_graph: # new model
+            self.architecture = architecture
             self.datetime = datetime.now().strftime(r"%y%m%d_%H%M")
             assert len(self.architecture) > 2, \
                 "Architecture must have more layers! (input, 1+ hidden, latent)"
@@ -208,13 +209,17 @@ class VAE():
             return mu + epsilon * tf.exp(log_sigma) # N(mu, I * sigma**2)
 
     def create_embedding(self, dataset, labels=None, label_names=None,
-                         sample_latent=True, latent_space=True, input_space=True):
+                         sample_latent=True, latent_space=True, input_space=True,
+                         image_dims=None):
         """dataset.shape = (num_items, item_dimension)
         labels.shape = (num_items, num_labels)
-        label_names = list"""
+        label_names = list
+        image_dims = tuple (if None, no sprite is created)
+        """
 
         if labels is not None:
             assert dataset.shape[0] == labels.shape[0]
+
         if not latent_space and not input_space:
             print("WARNING VAE.create_embedding called with input_space=False"
                   "and latent_space=False. No embedding created.")
@@ -239,13 +244,13 @@ class VAE():
             self.embedding_vars.append(emb_var_input)
 
         # since we create the embedding after training, we need to initialize the vars
-        tf.variables_initializer(self.embedding_vars).run(session=self.sesh)
+        self.sesh.run(tf.variables_initializer(self.embedding_vars))
 
         # we need two configs for the train and validation log folders
         # (otherwise outmatic metadata loading won't work)
         # Format: tensorflow/contrib/tensorboard/plugins/projector/projector_config.proto
-        configs = [projector.ProjectorConfig() for _ in range(2)]
         log_dirs = [self.train_writer_dir, self.validation_writer_dir]
+        configs = [projector.ProjectorConfig() for _ in range(len(log_dirs))]
 
         for config, log_dir in zip(configs, log_dirs):
             if latent_space:
@@ -274,10 +279,26 @@ class VAE():
                 if input_space:
                     embedding_input.metadata_path = metadata_file
 
+            if image_dims is not None:
+                # create sprite image
+                # reshape images into (N, width, height)
+                embedding_images = dataset.reshape((-1, *image_dims))
+                sprite_image = images_to_sprite(embedding_images)
+                sprite_file = os.path.join(log_dir, 'sprite_img.png')
+                scipy.misc.imsave(sprite_file, sprite_image)
+                if latent_space:
+                    embedding_latent.sprite.image_path = sprite_file
+                    embedding_latent.sprite.single_image_dim.extend(list(image_dims))
+                if input_space:
+                    embedding_input.sprite.image_path = sprite_file
+                    embedding_input.sprite.single_image_dim.extend(list(image_dims))
+
             # The next line writes a projector_config.pbtxt in the projector_dir. TensorBoard will
             # read this file during startup.
             projector.visualize_embeddings(tf.summary.FileWriter(log_dir), config)
 
+        # we need to save a new checkpoint with the embedding variables
+        self.save_checkpoint()
         print("Created embeddings")
 
     @staticmethod
@@ -343,9 +364,8 @@ class VAE():
 
     def train(self, X, max_iter=np.inf, max_epochs=np.inf, cross_validate_every_n=None,
               verbose=True, save_final_state=True, plots_outdir="./png",
-              plot_latent_over_time=False, plot_subsets_every_n=None, save_latent_embedding=True,
-              save_input_embedding=True, save_summaries_every_n=None, **kwargs):
-
+              plot_latent_over_time=False, plot_subsets_every_n=None,
+              save_summaries_every_n=None, **kwargs):
         if 'save' in kwargs.keys():
             raise TypeError("The `save` keyword was renamed to `save_final_state`!")
         elif kwargs:
@@ -431,25 +451,15 @@ class VAE():
                     break
 
         except KeyboardInterrupt:
-            print("... training interrupted!")
-            sys.exit(0)
+            print("\n... training interrupted!")
 
         finally:
             print("final cost (@ step {} = epoch {}): {}".format(
                 i_batch, X.train.epochs_completed, avg_cost))
             now = datetime.now().isoformat()[11:]
 
-            self.create_embedding(X.train.images, labels=X.train.labels,
-                                  latent_space=save_latent_embedding,
-                                  input_space=save_input_embedding)
-
             if save_final_state:
-                self.save_final_checkpoint()
-            elif save_embedding:
-                saver = tf.train.Saver(self.embedding_vars)
-                outfile = os.path.join(self.log_dir, "embedding_checkpoint")
-                print("Saving checkpoint for embeddings in {}".format(self.log_dir))
-                saver.save(self.sesh, outfile, global_step=self.step)
+                self.save_checkpoint()
 
             if save_summaries_every_n is not None:
                 self.train_writer.flush()
@@ -459,9 +469,12 @@ class VAE():
             print("... done!")
             print("------- Training end: {} -------\n".format(now))
 
-    def save_final_checkpoint(self):
+    def save_checkpoint(self, name=None):
+        checkpoint_name = 'checkpoint'
+        if name is not None:
+            checkpoint_name = name + '_' + 'checkpoint'
         saver = tf.train.Saver(tf.global_variables())
-        self.final_checkpoint = os.path.join(os.path.abspath(self.log_dir), "final_checkpoint")
-        print("Saving Variables in {}".format(self.log_dir))
+        self.final_checkpoint = os.path.join(os.path.abspath(self.log_dir), checkpoint_name)
+        print("Saving checkpoint in {}".format(self.log_dir))
         outfile = saver.save(self.sesh, self.final_checkpoint, global_step=self.step)
         return outfile
