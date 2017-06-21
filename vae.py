@@ -271,7 +271,7 @@ class VAE():
                                                                                labels.shape[1])
                     header = '\t'.join(label_names)
                 metadata_file = os.path.join(log_dir, 'metadata.tsv')
-                np.savetxt(metadata_file, labels, delimiter='/t', header=header)
+                np.savetxt(metadata_file, labels, delimiter='\t', header=header, comments='')
 
                 # Link this tensor to its metadata file (e.g. labels).
                 if latent_space:
