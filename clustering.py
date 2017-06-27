@@ -111,25 +111,40 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
     print('cluster idx count', np.bincount(cluster_indices))
     
     if true_labels is not None:
-        cluster_labels = - np.ones(cluster_indices.shape)
-        used_labels = []
-        for idx in range(1, num_clusters + 1):  # cluster_indices start at 1
-            cluster_mask = (cluster_indices == idx)
-            #print('cluster {} appears {} times'.format(idx, cluster_mask.sum()))
+
+        cluster_masks = []
+        label_fractions = []
+        highest_label_fractions = []
+        unique_cluster_indices = np.arange(1, num_clusters + 1)  # starts with 1
+        for idx in unique_cluster_indices:
+            mask = (cluster_indices == idx)
+            cluster_masks.append(mask)
             # get true labels for this cluster
-            true_cluster_labels = true_labels[cluster_mask]
-            # get the true label with the highest occurence
+            true_cluster_labels = true_labels[mask]
+            # get the ocurrences of true labels in the cluster
             counts = np.bincount(true_cluster_labels)
-            #print('bincount for true labels', counts)
-            label_options = counts.argsort()[::-1]
+            # compute their fraction to the total number of labels
+            fractions = counts / counts.sum()
+            label_fractions.append(fractions)
+            highest_label_fractions.append(fractions.max())
+
+        # assign labels in order of their "condidence" (highest_label_fraction)
+        sort_idx = np.argsort(highest_label_fractions)[::-1]
+        cluster_labels = - np.ones(cluster_indices.shape)
+        used_labels = {}
+        for idx in unique_cluster_indices[sort_idx]:
+            fractions = label_fractions[idx-1]
+            label_options = fractions.argsort()[::-1]
             for label in label_options:
-                if label not in used_labels:
-                    cluster_labels[cluster_mask] = label
-                    used_labels.append(label)
-                    #print('cluster {} gets label {}'.format(idx, label))
+                if label not in used_labels.keys():
+                    cluster_labels[cluster_masks[idx-1]] = label
+                    used_labels[label] = idx
+                    print('cluster {} gets label {} max {}'.format(idx, label, fractions.max()))
                     break
                 else:
-                    print('WARNING: label {} already used, bincount {}'.format(label, counts))
+                    other_idx = used_labels[label]
+                    other_fractions = label_fractions[other_idx-1]
+                    print('WARNING: label {} already used (this idx {} other idx {})\nthis fractions\t{}\nother fractions\t{}'.format(label, idx, other_idx, fractions, other_fractions))
         assert not any(cluster_labels == -1), 'Not all cluster_labels where set!'
     else:  # no true_labels given
         cluster_labels = cluster_indices - 1  # let indexing start at 0

@@ -25,7 +25,8 @@ class VAE():
         "dropout": 1.,
         "lambda_l2_reg": 0.,
         "nonlinearity": tf.nn.elu,
-        "squashing": tf.nn.sigmoid
+        "squashing": tf.nn.sigmoid,
+        "beta": 1.0
     }
     RESTORE_KEY = "to_restore"
 
@@ -163,7 +164,7 @@ class VAE():
             tf.summary.scalar('KL_loss', kl_loss)
 
             # average over minibatch
-            cost = tf.add(rec_loss, kl_loss)
+            cost = tf.add(rec_loss, self.beta * kl_loss)
             tf.summary.scalar('vae_cost', cost)
             cost += l2_reg
             tf.summary.scalar('regularized_cost', cost)
@@ -283,7 +284,7 @@ class VAE():
                 # create sprite image
                 # reshape images into (N, width, height)
                 embedding_images = dataset.reshape((-1, *image_dims))
-                sprite_image = images_to_sprite(embedding_images)
+                sprite_image = images_to_sprite(embedding_images, invert=True)
                 sprite_file = os.path.join(log_dir, 'sprite_img.png')
                 scipy.misc.imsave(sprite_file, sprite_image)
                 if latent_space:

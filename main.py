@@ -9,11 +9,14 @@ from utils import get_mnist
 import vae
 
 
+# suppress tf log
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
 IMG_DIM = 28
 
 ARCHITECTURE = [IMG_DIM**2, # 784 pixels
                 500, 500, # intermediate encoding
-                2] # latent space dims
+                10] # latent space dims
                 # 50]
 # (and symmetrically back out again)
 
@@ -23,7 +26,8 @@ HYPERPARAMS = {
     "dropout": 0.9,
     "lambda_l2_reg": 1E-5,
     "nonlinearity": tf.nn.elu,
-    "squashing": tf.nn.sigmoid
+    "squashing": tf.nn.sigmoid,
+    "beta": 1.0
 }
 
 MAX_ITER = np.inf#2000#2**16
@@ -105,15 +109,23 @@ def main(to_reload=None):
         v = vae.VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
         v.train(mnist, max_iter=MAX_ITER, max_epochs=MAX_EPOCHS, cross_validate_every_n=2000,
                 verbose=True, save_final_state=True, plots_outdir=PLOTS_DIR,
-                plot_latent_over_time=False, plot_subsets_every_n=2000, save_summaries_every_n=100)
+                plot_latent_over_time=False, plot_subsets_every_n=None, save_summaries_every_n=100)
         v.create_embedding(mnist.test.images, labels=mnist.test.labels, label_names=None,
                            sample_latent=True, latent_space=True, input_space=True,
                            image_dims=(28, 28))
 
-    all_plots(v, mnist)
+    #all_plots(v, mnist)
 
 
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description='Run vae model')
+    parser.add_argument('--beta', nargs=1, type=float, default=HYPERPARAMS["beta"],
+                        help='beta value of betaVAE to use (default: 1.0)')
+    parser.add_argument('--arch', nargs='*', type=int, default=ARCHITECTURE[1:],
+                        help='decoder/encoder architecture to use')
+    args = parser.parse_args()
+
     tf.reset_default_graph()
 
     for DIR in (LOG_DIR, PLOTS_DIR):
@@ -122,8 +134,12 @@ if __name__ == "__main__":
         except FileExistsError:
             pass
 
-    try:
-        to_reload = sys.argv[1]
-        main(to_reload=to_reload)
-    except IndexError:
-        main()
+    HYPERPARAMS["beta"] = args.beta
+    ARCHITECTURE = [IMG_DIM**2] + args.arch
+    main()
+
+#    try:
+#        to_reload = sys.argv[1]
+#        main(to_reload=to_reload)
+#    except IndexError:
+#        main()
