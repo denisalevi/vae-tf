@@ -61,8 +61,9 @@ def test_mnist_example():
     v.train(mnist, max_iter=2, max_epochs=1, cross_validate_every_n=1,
             verbose=False, save_final_state=True, plots_outdir=PLOTS_DIR,
             plot_latent_over_time=False, plot_subsets_every_n=1,
-            save_summaries_every_n=1, save_input_embedding=True,
-            save_latent_embedding=True)
+            save_summaries_every_n=1)
+    v.create_embedding(mnist.train.images, labels=mnist.train.labels,
+                       image_dims=(28, 28))
 
 @with_setup(clear_dirs)
 def test_reloading_meta_graph():
