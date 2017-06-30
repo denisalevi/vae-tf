@@ -7,10 +7,11 @@ import scipy
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
+import tensorflow.contrib.layers
 
 from layers import Dense
 import plot
-from utils import composeAll, print_, images_to_sprite
+from utils import composeAll, print_, images_to_sprite, variable_summaries
 
 
 class VAE():
@@ -26,6 +27,7 @@ class VAE():
         "lambda_l2_reg": 0.,
         "nonlinearity": tf.nn.elu,
         "squashing": tf.nn.sigmoid,
+        # TODO add beta to file name
         "beta": 1.0
     }
     RESTORE_KEY = "to_restore"
@@ -113,6 +115,42 @@ class VAE():
         """Train step"""
         return self.global_step.eval(session=self.sesh)
 
+    def _build_encoder(self, x, dropout=1):
+        # TODO why make a copy?
+        encoder = tf.identity(x)
+        for arch in self.architecture[1:-1]:
+            encoder = tf.contrib.layers.fully_connected(
+                inputs=encoder,
+                num_outputs=arch,
+                activation_fn=self.nonlinearity,
+                weights_initializer=tf.contrib.layers.xavier_initializer(),
+                biases_initializer=tf.zeros_initializer())
+                #biases_initializer=tf.contrib.layers.constant_initializer(0.001),
+            encoder = tf.nn.dropout(encoder, dropout)
+        return encoder
+
+    def _build_decoder(self, z, dropout=1, reuse_variables=False):
+        # TODO why make a copy?
+        decoder = tf.identity(z)
+        for arch in self.architecture[-2:0:-1]:
+            decoder = tf.contrib.layers.fully_connected(
+                inputs=decoder,
+                num_outputs=arch,
+                activation_fn=self.nonlinearity,
+                weights_initializer=tf.contrib.layers.xavier_initializer(),
+                biases_initializer=tf.zeros_initializer())
+                #biases_initializer=tf.contrib.layers.constant_initializer(0.001),
+            decoder = tf.nn.dropout(decoder, dropout)
+        # last layer into latent
+        decoder = tf.contrib.layers.fully_connected(
+            inputs=decoder,
+            num_outputs=self.architecture[0],
+            activation_fn=self.squashing,
+            weights_initializer=tf.contrib.layers.xavier_initializer(),
+            biases_initializer=tf.zeros_initializer())
+            #biases_initializer=tf.contrib.layers.constant_initializer(0.001),
+        return decoder
+
     def _buildGraph(self):
         x_in = tf.placeholder(tf.float32, shape=[None, # enables variable batch size
                                                  self.architecture[0]], name="x")
@@ -120,32 +158,43 @@ class VAE():
 
         hidden_layers = self.architecture[1: -1]
         # encoding / "recognition": q(z|x)
-        with tf.name_scope("encoding"):
-            encoding = [Dense("dense{}".format(len(hidden_layers) - (n + 1)), hidden_size, dropout, self.nonlinearity)
-                        # hidden layers reversed for function composition: outer -> inner
-                        for n, hidden_size in enumerate(reversed(hidden_layers))]
-            h_encoded = composeAll(encoding)(x_in)
-        #h_encoded = tf.identity(h_encoded, name="x_encoded")
+        with tf.variable_scope("encoding"):
+            h_encoded = self._build_encoder(x_in, dropout=dropout)
 
         # latent distribution parameterized by hidden encoding
         # z ~ N(z_mean, np.exp(z_log_sigma)**2)
-        with tf.name_scope("sample_latent"):
-            z_mean = Dense("z_mean", self.architecture[-1], dropout)(h_encoded)
-            z_log_sigma = Dense("z_log_sigma", self.architecture[-1], dropout)(h_encoded)
+            with tf.variable_scope("z_mean"):
+                z_mean = tf.contrib.layers.fully_connected(
+                    inputs=h_encoded,
+                    activation_fn=None,
+                    num_outputs=self.architecture[-1])
+                    #, name="z_mean")
+                z_mean = tf.nn.dropout(z_mean, dropout)
+            #z_mean = Dense("z_mean", self.architecture[-1], dropout)(h_encoded)
+            with tf.variable_scope("z_log_sigma"):
+                z_log_sigma = tf.contrib.layers.fully_connected(
+                    inputs=h_encoded,
+                    activation_fn=None,
+                    num_outputs=self.architecture[-1])
+                    #, name="z_log_sigma")
+                z_log_sigma = tf.nn.dropout(z_log_sigma, dropout)
+            #z_log_sigma = Dense("z_log_sigma", self.architecture[-1], dropout)(h_encoded)
 
+        with tf.name_scope("sample_latent"):
             # kingma & welling: only 1 draw necessary as long as minibatch large enough (>100)
             z = self.sampleGaussian(z_mean, z_log_sigma)
 
         # decoding / "generative": p(x|z)
-        decoding = [Dense("dense{}".format(len(hidden_layers) - (n + 1)), hidden_size, dropout, self.nonlinearity)
-                    for n, hidden_size in enumerate(hidden_layers)] # assumes symmetry
+        #decoding = [Dense("dense{}".format(len(hidden_layers) - (n + 1)), hidden_size, dropout, self.nonlinearity)
+        #            for n, hidden_size in enumerate(hidden_layers)] # assumes symmetry
         # final reconstruction: restore original dims, squash outputs [0, 1]
         # prepend as outermost function
-        decoding.insert(0, Dense("dense{}".format(len(hidden_layers)),
-                                 self.architecture[0], dropout, self.squashing))
+        #decoding.insert(0, Dense("dense{}".format(len(hidden_layers)),
+        #                         self.architecture[0], dropout, self.squashing))
 
-        with tf.name_scope("reconstructing"):
-            x_reconstructed = composeAll(decoding)(z)
+        with tf.variable_scope("decoding"):
+            x_reconstructed = self._build_decoder(z, dropout=dropout)
+            #x_reconstructed = composeAll(decoding)(z)
         #x_reconstructed = tf.identity(x_reconstructed, name="x_reconstructed")
 
         with tf.name_scope("l2_regularization"):
@@ -192,12 +241,13 @@ class VAE():
             z_in = tf.placeholder_with_default(tf.random_normal([1, self.architecture[-1]]),
                                              shape=[None, self.architecture[-1]],
                                              name="latent_in")
-        with tf.name_scope("decoding"):
-            for dense_layer in decoding:
-                # don't summarize params when decoding latent_in
-                dense_layer.summarize_params = False
-            x_decoded = composeAll(decoding)(z_in)
-        #x_decoded = tf.identity(x_decoded, name="x_decoded")
+        with tf.variable_scope("decoding", reuse=True):
+            x_decoded = self._build_decoder(z_in, dropout=dropout)#, reuse_variables=True)
+
+        # create summaries of weights and biases
+        for var in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
+            if var.name.endswith(('weights:0', 'biases:0')):
+                variable_summaries(var)
 
         return (x_in, dropout, z_mean, z_log_sigma, x_reconstructed,
                 z_in, x_decoded, cost, global_step, train_op)

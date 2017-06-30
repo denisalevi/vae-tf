@@ -34,9 +34,9 @@ def get_mnist(n, mnist):
         if labels[i] == n:
             return imgs[i] # first match
 
-def variable_summaries(variable, scope_name):
+def variable_summaries(variable, scope_name=None):
     """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
-    with tf.name_scope(scope_name):
+    with tf.name_scope(scope_name, default_name='{}_summaries'.format(variable.op.name)):
         mean = tf.reduce_mean(variable)
         stddev = tf.sqrt(tf.reduce_mean(tf.square(variable - mean)))
         tf.summary.scalar('mean', mean)
