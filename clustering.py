@@ -136,15 +136,22 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
             fractions = label_fractions[idx-1]
             label_options = fractions.argsort()[::-1]
             for label in label_options:
+                fraction = fractions[label]
                 if label not in used_labels.keys():
                     cluster_labels[cluster_masks[idx-1]] = label
-                    used_labels[label] = idx
-                    print('cluster {} gets label {} max {}'.format(idx, label, fractions.max()))
+                    used_labels[label] = (idx, fraction)
+                    print('Cluster {} gets label {} with fraction '
+                          '{:.3f} (max {:.3f})'.format(idx, label, fraction,
+                                                       fractions.max()))
                     break
                 else:
-                    other_idx = used_labels[label]
-                    other_fractions = label_fractions[other_idx-1]
-                    print('WARNING: label {} already used (this idx {} other idx {})\nthis fractions\t{}\nother fractions\t{}'.format(label, idx, other_idx, fractions, other_fractions))
+                    other_idx, other_fraction = used_labels[label]
+                    #other_fractions = label_fractions[other_idx-1]
+                    print('\nWARNING: label {} already used\n'
+                          '\t\t\tthis\tother\n'
+                          '\tidx\t\t{}\t{}\n'
+                          '\tfraction\t{:.3f}\t{:.3f}\n'.format(label, idx,other_idx,
+                                                              fraction, other_fraction))
         assert not any(cluster_labels == -1), 'Not all cluster_labels where set!'
     else:  # no true_labels given
         cluster_labels = cluster_indices - 1  # let indexing start at 0
