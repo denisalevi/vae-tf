@@ -9,7 +9,6 @@ import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
 from tensorflow.contrib import layers
 
-from layers import Dense
 import plot
 from utils import composeAll, print_, images_to_sprite, variable_summaries
 
@@ -111,9 +110,7 @@ class VAE():
             handles = self.sesh.graph.get_collection(VAE.RESTORE_KEY)
 
         # unpack handles for tensor ops to feed or fetch
-        (self.x_in, self.dropout_, self.z_mean, self.z_log_sigma,
-         self.x_reconstructed, self.z_in, self.x_decoded,
-         self.cost, self.global_step, self.train_op) = handles
+        self.unpack_handles(handles)
 
         # Merge all the summaries and create writers
         self.merged_summaries = tf.summary.merge_all()
@@ -374,6 +371,14 @@ class VAE():
         return (x_in, dropout, z_mean, z_log_sigma, x_reconstructed,
                 z_in, x_decoded, cost, global_step, train_op)
 
+    def unpack_handles(self, handles):
+        """Assignes the operations returned from _build_graph() to class attributes. These must include:
+        (x_in, x_decoded, x_reconstructed, z_mean, z_log_sigma, z_in, global_step, dropout_, cost, train_op)
+        """
+        (self.x_in, self.dropout_, self.z_mean, self.z_log_sigma,
+         self.x_reconstructed, self.z_in, self.x_decoded,
+         self.cost, self.global_step, self.train_op) = handles
+
     def sampleGaussian(self, mu, log_sigma):
         """(Differentiably!) draw sample from Gaussian with given shape, subject to random noise epsilon"""
         with tf.name_scope("sample_gaussian"):
@@ -626,6 +631,10 @@ class VAE():
         except KeyboardInterrupt:
             print("\n... training interrupted!")
 
+        except:
+            print("\n... unxepected Error! Aborting.")
+            raise
+
         finally:
             print("final cost (@ step {} = epoch {}): {}".format(
                 i_batch, X.train.epochs_completed, avg_cost))
@@ -639,7 +648,6 @@ class VAE():
                 self.train_writer.close()
                 self.validation_writer.flush()
                 self.validation_writer.close()
-            print("... done!")
             print("------- Training end: {} -------\n".format(now))
 
     def save_checkpoint(self, name=None):
