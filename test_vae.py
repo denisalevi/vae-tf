@@ -80,5 +80,42 @@ def test_reloading_meta_graph():
     tf.reset_default_graph()
     v = vae.VAE(ARCHITECTURE, HYPERPARAMS, meta_graph=checkpoint)
 
+@with_setup(clear_dirs)
+def test_architecture_model_naming_and_reloading():
+    arch = [
+        784,  # if removed, remove [1:] in loop below
+        [5, 5, 1, 'SAME'],
+        [5, 5, 1, 'same'],
+        [5, (5,5), (1,1), 'SAME'],
+        [5, 5, 1],
+        [5, (5,5), (1,1)],
+        [5, 5, 'SAME'],
+        [5, 5],
+        [5, (5,5)],
+        10  # if removed, remove [1:] in loop below
+    ]
+    myvae = vae.VAE(arch, init=False)
+    model_name, *_ = myvae.get_new_layer_architecture(arch)
+    split = model_name.split('_')
+    for name in split[1:-1]:
+        assert name == 'conv-5x5x5-1x1-S', 'unexpected name {}'.format(name)
+    assert split[0] == '784', split[0]
+    assert split[-1] == '10', split[-1]
+
+    arch_reload = myvae.get_architecture_from_model_name(model_name)
+    for layer in arch_reload[1:-1]:
+        assert layer[0] == 5, layer[0]
+        assert layer[1] == (5, 5), layer[1]
+        assert layer[2] == (1, 1), layer[2]
+        assert layer[3] == 'SAME', layer[3]
+    assert arch_reload[0] == 784, arch_reload[0]
+    assert arch_reload[-1] == 10, arch_reload[-1]
+
+    arch2 = [784, 500, 10]
+    model_name2, *_ = myvae.get_new_layer_architecture(arch2)
+    assert model_name2 == '784_fc-500_10', model_name2
+    arch_reload2 = myvae.get_architecture_from_model_name(model_name2)
+    assert arch_reload2[1] == 500
+
 if __name__ == '__main__':
-    test_reloading_meta_graph()
+    test_architecture_model_naming()

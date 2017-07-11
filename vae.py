@@ -7,7 +7,7 @@ import scipy
 import numpy as np
 import tensorflow as tf
 from tensorflow.contrib.tensorboard.plugins import projector
-import tensorflow.contrib.layers
+from tensorflow.contrib import layers
 
 from layers import Dense
 import plot
@@ -28,12 +28,15 @@ class VAE():
         "nonlinearity": tf.nn.elu,
         "squashing": tf.nn.sigmoid,
         # TODO add beta to file name
-        "beta": 1.0
+        "beta": 1.0,
+        "weights_initializer": layers.xavier_initializer(),
+        "biases_initializer": tf.zeros_initializer(),
+        "conv_filter_initializer": None,  # None is default
     }
     RESTORE_KEY = "to_restore"
 
     def __init__(self, architecture=[], d_hyperparams={}, meta_graph=None,
-                 log_dir="./log"):
+                 log_dir="./log", init=True):
         """(Re)build a symmetric VAE model with given:
 
             * architecture (list of nodes per encoder layer); e.g.
@@ -43,16 +46,26 @@ class VAE():
             * hyperparameters (optional dictionary of updates to `DEFAULTS`)
         """
         self.__dict__.update(VAE.DEFAULTS, **d_hyperparams)
+
+        if not init:
+            # for faster testing
+            return
+
         self.sesh = tf.Session()
 
         if not meta_graph: # new model
             self.architecture = architecture
+
+            model_name, layers, params = self.get_new_layer_architecture(architecture)
+            self.hidden_layers = layers
+            self.hidden_params = params
+
             self.datetime = datetime.now().strftime(r"%y%m%d_%H%M")
             assert len(self.architecture) > 2, \
                 "Architecture must have more layers! (input, 1+ hidden, latent)"
 
             self.log_dir = os.path.join(os.path.abspath(log_dir), "{}_vae_{}".format(
-                self.datetime, "_".join(map(str, self.architecture))))
+                self.datetime, model_name))
 
             # build graph
             handles = self._buildGraph()
@@ -88,8 +101,8 @@ class VAE():
                     break
                 unique_idx += 1
             self.datetime = model_datetime
-            model_architecture = re.split("_|-", model_name)
-            self.architecture = [int(n) for n in model_architecture]
+
+            self.architecture = self.get_architecture_from_model_name(model_name)
 
             # rebuild graph
             meta_graph = os.path.abspath(meta_graph)
@@ -110,6 +123,114 @@ class VAE():
         self.train_writer = tf.summary.FileWriter(self.train_writer_dir, self.sesh.graph)
         self.validation_writer = tf.summary.FileWriter(self.validation_writer_dir)
 
+    def get_new_layer_architecture(self, architecture):
+        hidden_layers = []
+        hidden_params = []
+        layer_names = [str(architecture[0])]
+        for n, layer in enumerate(architecture[1:-1]):
+            if isinstance(layer, int):
+                # fully connected layer
+                hidden_layers.append('fully_connected')
+                num_outputs = layer
+                layer_names.append('fc-' + str(num_outputs))
+                hidden_params.append({'num_outputs': num_outputs,
+                                      'activation_fn': self.nonlinearity,
+                                      'weights_initializer': self.weights_initializer,
+                                      'biases_initializer': self.biases_initializer})
+            elif isinstance(layer, (tuple, list)): # convolutional layer
+                #err_msg = 'architecture[{}][0] must be list or tuple, is {}'.format(n+1, type(layer[0]))
+                #assert isinstance(layer[0], tuple), err_msg
+                # layer format: [num_filters, filter_shape, strides, padding]
+                hidden_layers.append('convolution')
+
+                # extract the convolutional parameters
+                if len(layer) == 4:
+                    num_filters, filter_shape, strides, padding = layer
+                elif len(layer) == 3:
+                    num_filters, filters_shape, tmp = layer
+                    err_msg = 'architecture[{}][2] must be str, int or tuple(int), is {}'.format(n+1, type(tmp))
+                    if isinstance(tmp, str):
+                        padding = tmp
+                        strides = (1, 1)  # default
+                    elif isinstance(tmp, (tuple, int)):
+                        strides = tmp
+                        padding = 'SAME'  # default
+                        if isinstance(strides, tuple) and not all([isinstance(s, int) for s in strides]):
+                            raise ValueError(err_msg)
+                    else:
+                        raise ValueError(err_msg)
+                elif len(layer) == 2:
+                    num_filters, filter_shape = layer
+                    strides = (1, 1)  # default
+                    padding = 'SAME'  # default
+                else:
+                    raise ValueError('architecture[{}] (convolutional layer) must have lentgth 2, 3 or 4'
+                                     ', has length {}'.format(n+1, len(layer)))
+
+                err_msg = 'architecture[{}][{}] needs to be one of {}, but is {}'
+                assert isinstance(num_filters, int), err_msg.format(n+1, 0, (int), type(num_filters))
+                assert isinstance(filter_shape, (int, tuple)), err_msg.format(n+1, 1, (int, tuple), type(filter_shape))
+                assert isinstance(strides, (int, tuple)), err_msg.format(n+1, 1, (int, tuple), type(strides))
+
+                filter_shape = filter_shape if isinstance(filter_shape, tuple) else (filter_shape, filter_shape)
+                strides = strides if isinstance(strides, tuple) else (strides, strides)
+
+
+                # convolutional layer name format: ..._conv-NxF1xF2-S1xS2-P_...
+                # where N - num_filters, F1/2 - filter_shape, S1/2 - strides, P - padding ('S' for 'SAME', 'V' for 'VALID')
+                layer_names.append('conv-'
+                                   # filter shape ('NxF1xF2')
+                                   + 'x'.join([str(num_filters)] + list(map(str, filter_shape))) + '-'
+                                   # strides ('S1xS2')
+                                   + 'x'.join((list(map(str, strides)))) + '-'
+                                   # padding ('S' or 'V')
+                                   + 'S' if padding.lower() == 'same' else 'V')
+
+                hidden_params.append({'filters': num_filters,
+                                      'kernel_size': filter_shape,
+                                      'strides': strides,
+                                      'padding': padding,
+                                      'activation': self.nonlinearity,
+                                      'weights_initializer': self.weights_initializer,
+                                      'biases_initializer': self.biases_initializer,
+                                      'kernel_initializer': self.conv_filter_initializer})
+            else:
+                raise ValueError("architecure[{}]={} not understood. "
+                                 "Has to be int (Dense) or tuple (Convolutional).".format(n+1, layer))
+
+        layer_names.append(str(architecture[-1]))
+        model_name = '_'.join(layer_names)
+        return model_name, hidden_layers, hidden_params
+
+    @staticmethod
+    def get_architecture_from_model_name(model_name):
+        architecture = []
+        layer_names = model_name.split("_")
+        for name in layer_names:
+            layer_type, *layer_params = name.split('-')
+            if layer_type == 'fc':
+                assert len(layer_params) == 1
+                num_outputs = int(layer_params[0])
+                architecture.append(num_outputs)
+            elif layer_type == 'conv':
+                assert len(layer_params) == 3
+                filters, strides, padding = layer_params
+                num_filters, *filter_shape = filters.split('x')
+                num_filters = int(num_filters)
+                filter_shape = tuple([int(f) for f in filter_shape])
+                strides = tuple([int(s) for s in strides.split('x')])
+                padding = 'SAME' if padding == 'S' else 'VALID'
+                architecture.append([num_filters, filter_shape, strides, padding])
+            elif len(layer_params) == 0:
+                # old naming without fc- / conv- but only int (fully connected)
+                num_outputs = int(layer_type)
+                architecture.append(num_outputs)
+            else:
+                raise ValueError("Couldn't split model name {} into architecture."
+                                 "".format(model_name))
+        return architecture
+
+
     @property
     def step(self):
         """Train step"""
@@ -119,13 +240,13 @@ class VAE():
         # TODO why make a copy?
         encoder = tf.identity(x)
         for arch in self.architecture[1:-1]:
-            encoder = tf.contrib.layers.fully_connected(
+            encoder = layers.fully_connected(
                 inputs=encoder,
                 num_outputs=arch,
                 activation_fn=self.nonlinearity,
-                weights_initializer=tf.contrib.layers.xavier_initializer(),
+                weights_initializer=layers.xavier_initializer(),
                 biases_initializer=tf.zeros_initializer())
-                #biases_initializer=tf.contrib.layers.constant_initializer(0.001),
+                #biases_initializer=layers.constant_initializer(0.001),
             encoder = tf.nn.dropout(encoder, dropout)
         return encoder
 
@@ -133,22 +254,23 @@ class VAE():
         # TODO why make a copy?
         decoder = tf.identity(z)
         for arch in self.architecture[-2:0:-1]:
-            decoder = tf.contrib.layers.fully_connected(
+            decoder = layers.fully_connected(
                 inputs=decoder,
                 num_outputs=arch,
                 activation_fn=self.nonlinearity,
-                weights_initializer=tf.contrib.layers.xavier_initializer(),
+                weights_initializer=layers.xavier_initializer(),
                 biases_initializer=tf.zeros_initializer())
-                #biases_initializer=tf.contrib.layers.constant_initializer(0.001),
+                #biases_initializer=layers.constant_initializer(0.001),
             decoder = tf.nn.dropout(decoder, dropout)
-        # last layer into latent
-        decoder = tf.contrib.layers.fully_connected(
+        # final reconstruction: restore original dims, squash outputs [0, 1]
+        # prepend as outermost function
+        decoder = layers.fully_connected(
             inputs=decoder,
             num_outputs=self.architecture[0],
             activation_fn=self.squashing,
-            weights_initializer=tf.contrib.layers.xavier_initializer(),
+            weights_initializer=layers.xavier_initializer(),
             biases_initializer=tf.zeros_initializer())
-            #biases_initializer=tf.contrib.layers.constant_initializer(0.001),
+            #biases_initializer=layers.constant_initializer(0.001),
         return decoder
 
     def _buildGraph(self):
@@ -164,7 +286,7 @@ class VAE():
         # latent distribution parameterized by hidden encoding
         # z ~ N(z_mean, np.exp(z_log_sigma)**2)
             with tf.variable_scope("z_mean"):
-                z_mean = tf.contrib.layers.fully_connected(
+                z_mean = layers.fully_connected(
                     inputs=h_encoded,
                     activation_fn=None,
                     num_outputs=self.architecture[-1])
@@ -172,7 +294,7 @@ class VAE():
                 z_mean = tf.nn.dropout(z_mean, dropout)
             #z_mean = Dense("z_mean", self.architecture[-1], dropout)(h_encoded)
             with tf.variable_scope("z_log_sigma"):
-                z_log_sigma = tf.contrib.layers.fully_connected(
+                z_log_sigma = layers.fully_connected(
                     inputs=h_encoded,
                     activation_fn=None,
                     num_outputs=self.architecture[-1])
