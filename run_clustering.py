@@ -140,8 +140,8 @@ for _ in range(args.repeat):
         label.append(str(args.beta))
 
     label = '\t'.join(label)
-    print(labels)
+    print(label)
 
     with open(args.save, 'a') as log_file:
-        txt = '{}\t{}\t{}\t{}\n'.format(labels, accuracy, accuracy2, accuracy_in)
+        txt = '{}\t{}\t{}\t{}\n'.format(label, accuracy, accuracy2, accuracy_in)
         log_file.write(txt)
