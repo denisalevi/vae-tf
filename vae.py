@@ -247,7 +247,7 @@ class VAE():
             encoder = tf.nn.dropout(encoder, dropout)
         return encoder
 
-    def _build_decoder(self, z, dropout=1, reuse_variables=False):
+    def _build_decoder(self, z, dropout=1):
         # TODO why make a copy?
         decoder = tf.identity(z)
         for arch in self.architecture[-2:0:-1]:
@@ -275,7 +275,6 @@ class VAE():
                                                  self.architecture[0]], name="x")
         dropout = tf.placeholder_with_default(1., shape=[], name="dropout")
 
-        hidden_layers = self.architecture[1: -1]
         # encoding / "recognition": q(z|x)
         with tf.variable_scope("encoding"):
             h_encoded = self._build_encoder(x_in, dropout=dropout)
@@ -286,35 +285,23 @@ class VAE():
                 z_mean = layers.fully_connected(
                     inputs=h_encoded,
                     activation_fn=None,
+                    # TODO have self.latent_space_dim as variables instead
                     num_outputs=self.architecture[-1])
-                    #, name="z_mean")
                 z_mean = tf.nn.dropout(z_mean, dropout)
-            #z_mean = Dense("z_mean", self.architecture[-1], dropout)(h_encoded)
             with tf.variable_scope("z_log_sigma"):
                 z_log_sigma = layers.fully_connected(
                     inputs=h_encoded,
                     activation_fn=None,
                     num_outputs=self.architecture[-1])
-                    #, name="z_log_sigma")
                 z_log_sigma = tf.nn.dropout(z_log_sigma, dropout)
-            #z_log_sigma = Dense("z_log_sigma", self.architecture[-1], dropout)(h_encoded)
 
         with tf.name_scope("sample_latent"):
             # kingma & welling: only 1 draw necessary as long as minibatch large enough (>100)
             z = self.sampleGaussian(z_mean, z_log_sigma)
 
         # decoding / "generative": p(x|z)
-        #decoding = [Dense("dense{}".format(len(hidden_layers) - (n + 1)), hidden_size, dropout, self.nonlinearity)
-        #            for n, hidden_size in enumerate(hidden_layers)] # assumes symmetry
-        # final reconstruction: restore original dims, squash outputs [0, 1]
-        # prepend as outermost function
-        #decoding.insert(0, Dense("dense{}".format(len(hidden_layers)),
-        #                         self.architecture[0], dropout, self.squashing))
-
         with tf.variable_scope("decoding"):
             x_reconstructed = self._build_decoder(z, dropout=dropout)
-            #x_reconstructed = composeAll(decoding)(z)
-        #x_reconstructed = tf.identity(x_reconstructed, name="x_reconstructed")
 
         with tf.name_scope("l2_regularization"):
             regularizers = [tf.nn.l2_loss(var) for var in self.sesh.graph.get_collection(
@@ -337,12 +324,6 @@ class VAE():
             cost += l2_reg
             tf.summary.scalar('regularized_cost', cost)
 
-            # first add then reduce_mean
-            #rec_loss = VAE.crossEntropy(x_reconstructed, x_in)
-            #kl_loss = VAE.kullbackLeibler(z_mean, z_log_sigma)
-            #cost = tf.reduce_mean(rec_loss + kl_loss, name="vae_cost")
-            #cost += l2_reg
-
         # optimization
         global_step = tf.Variable(0, trainable=False)
         with tf.name_scope("Adam_optimizer"):
@@ -361,7 +342,7 @@ class VAE():
                                              shape=[None, self.architecture[-1]],
                                              name="latent_in")
         with tf.variable_scope("decoding", reuse=True):
-            x_decoded = self._build_decoder(z_in, dropout=dropout)#, reuse_variables=True)
+            x_decoded = self._build_decoder(z_in, dropout=dropout)
 
         # create summaries of weights and biases
         for var in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):
