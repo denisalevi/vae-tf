@@ -124,3 +124,57 @@ def random_subset(images, size, labels=None, same_num_labels=False):
         if labels is not None:
             new_labels = labels[subset]
     return new_images, new_labels
+
+def get_deconv_params(out_size, in_size, filter_size, stride):
+    """Get parameters for tf.contrib.layer.conv2d_transpose such that the output
+    shape equals the input shape of the corresponding conv2d operation.
+
+    The output shape of the conv2d_transpose operation is calculated as:
+        for padding == 'SAME':
+            out_size = in_size * s + max(filter_size - stride, 0)
+        for padding == 'VALID':
+            out_size = in_size * s
+
+    If the input size is smaller then the filter size, use 'VALID' padding and
+    try to use the same stride as in the conv2d operation and change the
+    filter_size. If not possible, decrease the stride.
+    If the input size is not smalle then the filter size, try to achieve the desired
+    output shape with 'SAME' padding by changing the stride. If not possible, use
+    'VALID' padding.
+
+    :param out_size: The desired output shape (input of the conv2d operation)
+    :param in_size: The current input shape
+    :param filter_size: The filter size used in the conv2d operation
+    :param stride: The stride used in the conv2d operation
+    """
+    out_size = np.asarray(out_size)
+    in_size = np.asarray(in_size)
+    filter_size = np.asarray(filter_size)
+    stride = np.asarray(stride)
+
+    for var in [out_size, in_size, filter_size, stride]:
+        #print(var, np.isscalar(var), type(var), var.shape)
+        assert len(var) == 2, \
+                'All params need to be be of len 2, got {}'.format(var)
+
+    if np.any(in_size < filter_size) or not np.all(np.mod(out_size, in_size) == 0):
+        padding = 'VALID'
+        # tf.contrib.layer.conv2d_transpose calculates the output shape as
+        # out_size = in_size * s + max(filter_size - stride, 0)
+        filter_size = out_size - stride * (in_size - 1)
+        if np.any(stride > filter_size) and not np.all(stride > filter_size):
+            print("WARNING: Changing x/y ratio of filter/stride in deconvolution")
+        for n in range(2):
+            if stride[n] > filter_size[n]:
+                stride[n] = stride[n] - 1
+                filter_size[n] = out_size[n] - stride[n] * (in_size[n] - 1)
+                assert stride[n] <= filter_size[n], \
+                        'Bug in calculating deconvolution output shape. n={} '\
+                        'stride[n]={}, filter[n]={}'.format(n, stride[n],
+                                                                filter_size[n])
+    else:
+        padding = 'SAME'
+        # tf.contrib.layer.conv2d_transpose calculates the output shape as
+        # out_shape = in_shape * stride
+        stride = out_size // in_size  # if this is no int, use VALID padding
+    return filter_size, stride, padding

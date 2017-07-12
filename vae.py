@@ -10,7 +10,7 @@ from tensorflow.contrib.tensorboard.plugins import projector
 from tensorflow.contrib import layers
 
 import plot
-from utils import composeAll, print_, images_to_sprite, variable_summaries
+from utils import composeAll, print_, images_to_sprite, variable_summaries, get_deconv_params
 
 
 class VAE():
@@ -26,8 +26,10 @@ class VAE():
         "lambda_l2_reg": 0.,
         "nonlinearity": tf.nn.elu,
         "squashing": tf.nn.sigmoid,
+        #"max_pooling": (2, 2),
         # TODO add beta to file name
         "beta": 1.0,
+        "img_dims": (28, 28),
         "weights_initializer": layers.xavier_initializer(),
         "biases_initializer": tf.zeros_initializer(),
         "conv_filter_initializer": None,  # None is default
@@ -75,6 +77,7 @@ class VAE():
         else: # restore saved model
             # assuming meta_graph is the checkpoint file located in the models self.log_dir
             log_dir = os.path.dirname(os.path.realpath(meta_graph))
+
             prefix, model_name = os.path.basename(log_dir).split("_vae_")
             prefix_split = prefix.split("_reloaded")
             # when reloaded, the new log_dir will be
@@ -236,43 +239,111 @@ class VAE():
     def _build_encoder(self, x, dropout=1):
         # TODO why make a copy?
         encoder = tf.identity(x)
-        for arch in self.architecture[1:-1]:
-            encoder = layers.fully_connected(
-                inputs=encoder,
-                num_outputs=arch,
-                activation_fn=self.nonlinearity,
-                weights_initializer=layers.xavier_initializer(),
-                biases_initializer=tf.zeros_initializer())
-                #biases_initializer=layers.constant_initializer(0.001),
-            encoder = tf.nn.dropout(encoder, dropout)
+        self.decoder_out_shapes = []
+        self.decoder_params = []
+        for layer, params in zip(self.hidden_layers, self.hidden_params):
+            *in_shape, in_channels = encoder.get_shape().as_list()[1:]
+            # save encoder input shape as decoder output shape
+            self.decoder_out_shapes.append(in_shape)
+            decoder_params = params.copy()
+            if layer == 'fully_connected':
+                encoder = layers.fully_connected(encoder, **params)
+                encoder = tf.nn.dropout(encoder, dropout)
+                # change the decoder number of outputs to encoder number of inputs
+                #decoder_params['num_outputs'] = in_
+            elif layer == 'convolution':
+                in_shape = encoder.get_shape().as_list()[1:3]
+                encoder = layers.conv2d(encoder, **params)
+                # change the number of decoder filters to the number of encoded channels
+                decoder_params['filters'] = in_channels
+
+        # also save intput shape for latent space (output of first decoder layer)
+        self.decoder_out_shapes.append(encoder.get_shape().as_list()[1:3])
+
+#        for arch in self.architecture[1:-1]:
+#            encoder = layers.fully_connected(
+#                inputs=encoder,
+#                num_outputs=arch,
+#                activation_fn=self.nonlinearity,
+#                weights_initializer=layers.xavier_initializer(),
+#                biases_initializer=tf.zeros_initializer())
+#                #biases_initializer=layers.constant_initializer(0.001),
+#            encoder = tf.nn.dropout(encoder, dropout)
         return encoder
 
     def _build_decoder(self, z, dropout=1):
         # TODO why make a copy?
         decoder = tf.identity(z)
-        for arch in self.architecture[-2:0:-1]:
-            decoder = layers.fully_connected(
-                inputs=decoder,
-                num_outputs=arch,
-                activation_fn=self.nonlinearity,
-                weights_initializer=layers.xavier_initializer(),
-                biases_initializer=tf.zeros_initializer())
-                #biases_initializer=layers.constant_initializer(0.001),
-            decoder = tf.nn.dropout(decoder, dropout)
-        # final reconstruction: restore original dims, squash outputs [0, 1]
-        # prepend as outermost function
-        decoder = layers.fully_connected(
-            inputs=decoder,
-            num_outputs=self.architecture[0],
-            activation_fn=self.squashing,
-            weights_initializer=layers.xavier_initializer(),
-            biases_initializer=tf.zeros_initializer())
-            #biases_initializer=layers.constant_initializer(0.001),
-        return decoder
+        # first layer out from latent space (TODO could also be convolutional layer)
+        shape =  self.decoder_out_shapes[-1] + [self.hidden_params[-1]["filters"]]
+        decoder = layers.fully_connected(decoder,
+                                         num_outputs=np.prod(shape),
+                                         activation_fn=self.nonlinearity,
+                                         weights_initializer=self.weights_initializer,
+                                         biases_initializer=self.biases_initializer)
+        # reshape to equal last encoder hidden layer [batches, height, width, channels]
+        decoder = tf.reshape(decoder, [-1] + shape)
+
+        # 
+        for layer, params, out_shape in zip(reversed(self.hidden_layers[1:]),
+                                            reversed(self.hidden_params[-1]),
+                                            reversed(self.decoder_out_shapes[-1])):
+            if layer == 'fully_connected':
+                raise NotImplementedError
+                #decoder = layers.fully_connected(decoder, **params)
+            elif layer == 'convolution':
+                in_shape = decoder.get_shape().as_list()[1:3]
+                filter_shape, stride_shape, padding = get_deconv_params(
+                    out_shape, in_shape, params["kernel_size"], params["strides"])
+                deconv_params = params.copy()
+                deconv_params["kernel_size"] = filter_shape
+                deconv_params["strides"] = stride_shape
+                deconv_params["padding"] = padding
+                decoder = layers.conv2d_transpose(decoder, **deconv_params)
+            else:
+                assert False, 'got something other then fc or conv string'
+
+        # final reconstruction layer: restore original dims, squash outputs [0, 1]
+        decoder = layers.conv2d_transpose(decoder,
+                                          filters=1,
+                                          kernel_size=self.img_dims,
+                                          strides=
+
+                hidden_params.append({'filters': num_filters,
+                                      'kernel_size': filter_shape,
+                                      'strides': strides,
+                                      'padding': padding,
+                                      'activation': self.nonlinearity,
+                                      'weights_initializer': self.weights_initializer,
+                                      'biases_initializer': self.biases_initializer,
+                                      'kernel_initializer': self.conv_filter_initializer})
+
+
+
+#        for arch in self.architecture[-2:0:-1]:
+#            decoder = layers.fully_connected(
+#                inputs=decoder,
+#                num_outputs=arch,
+#                activation_fn=self.nonlinearity,
+#                weights_initializer=layers.xavier_initializer(),
+#                biases_initializer=tf.zeros_initializer())
+#                #biases_initializer=layers.constant_initializer(0.001),
+#            decoder = tf.nn.dropout(decoder, dropout)
+#        # final reconstruction: restore original dims, squash outputs [0, 1]
+#        # prepend as outermost function
+#        decoder = layers.fully_connected(
+#            inputs=decoder,
+#            num_outputs=self.architecture[0],
+#            activation_fn=self.squashing,
+#            weights_initializer=layers.xavier_initializer(),
+#            biases_initializer=tf.zeros_initializer())
+#            #biases_initializer=layers.constant_initializer(0.001),
+#        return decoder
 
     def _buildGraph(self):
         x_in = tf.placeholder(tf.float32, shape=[None, # enables variable batch size
-                                                 self.architecture[0]], name="x")
+                                                 np.prod(self.img_dims)], name="x")
+                                                 #self.architecture[0]], name="x")
         dropout = tf.placeholder_with_default(1., shape=[], name="dropout")
 
         # encoding / "recognition": q(z|x)

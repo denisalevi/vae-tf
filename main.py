@@ -1,5 +1,6 @@
 import os
 import sys
+import glob
 
 import numpy as np
 import tensorflow as tf
@@ -30,11 +31,11 @@ HYPERPARAMS = {
     "beta": 1.0
 }
 
-MAX_ITER = np.inf#2000#2**16
+MAX_ITER = 40000#np.inf#2000#2**16
 MAX_EPOCHS = np.inf
 
-LOG_DIR = "./log"
-PLOTS_DIR = "./png"
+LOG_DIR = "./log_dummy"
+PLOTS_DIR = "./png_dummy"
 
 
 def load_mnist():
@@ -114,7 +115,7 @@ def main(to_reload=None):
                            sample_latent=True, latent_space=True, input_space=True,
                            image_dims=(28, 28))
 
-    #all_plots(v, mnist)
+    all_plots(v, mnist)
 
 
 if __name__ == "__main__":
@@ -137,6 +138,14 @@ if __name__ == "__main__":
     HYPERPARAMS["beta"] = args.beta
     ARCHITECTURE = [IMG_DIM**2] + args.arch
     main()
+
+    #print(sys.argv[1])
+    #beta = float(sys.argv[1])
+    #HYPERPARAMS["beta"] = beta
+    #main()
+    #arch = np.array(sys.argv[1:], dtype=np.int)
+    #ARCHITECTURE = [IMG_DIM**2] + list(arch)
+    #main()
 
 #    try:
 #        to_reload = sys.argv[1]
