@@ -48,7 +48,7 @@ class VAE():
                and stride_shape must be tuple or int (assuming same in both dimensions).
 
                [1000, [32, (5,5), (1,1), 'SAME'], 10] specifies a VAE with 1000-D inputs,
-               10-D latents space and a convolutional layer with 32 5x5 filters, stride (1, 2)
+               10-D latents space and a convolutional layer with 32 5x5 filters, stride (1, 1)
                and padding='SAME'. Using the default, [32, 5] would spcify the same layer. The
                deconvolution layer parameters are chosen such that the output dimensions fit
                the encoders input dimensions (possibly changing filter_shape and/or stride_shape).
@@ -711,7 +711,6 @@ class VAE():
         if name is not None:
             checkpoint_name = name + '_' + 'checkpoint'
         saver = tf.train.Saver(tf.global_variables())
-        self.final_checkpoint = os.path.join(os.path.abspath(self.log_dir), checkpoint_name)
+        final_checkpoint_name = os.path.join(os.path.abspath(self.log_dir), checkpoint_name)
         print("Saving checkpoint in {}".format(self.log_dir))
-        outfile = saver.save(self.sesh, self.final_checkpoint, global_step=self.step)
-        return outfile
+        self.final_checkpoint = saver.save(self.sesh, final_checkpoint_name, global_step=self.step)

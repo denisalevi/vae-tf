@@ -67,13 +67,15 @@ def test_reloading_meta_graph():
     clear_dirs()
     tf.reset_default_graph()
     v = vae.VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
-    checkpoint = v.save_checkpoint()
+    v.save_checkpoint()
+    checkpoint = v.final_checkpoint
     tf.reset_default_graph()
     v = vae.VAE(ARCHITECTURE, HYPERPARAMS, meta_graph=checkpoint)
-    _ = v.save_checkpoint()
+    v.save_checkpoint()
     tf.reset_default_graph()
     v = vae.VAE(ARCHITECTURE, HYPERPARAMS, meta_graph=checkpoint)
-    checkpoint = v.save_checkpoint()
+    v.save_checkpoint()
+    checkpoint = v.final_checkpoint
     tf.reset_default_graph()
     v = vae.VAE(ARCHITECTURE, HYPERPARAMS, meta_graph=checkpoint)
 
