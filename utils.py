@@ -2,19 +2,9 @@ import functools
 import random
 
 import numpy as np
-from functional import compose, partial
 import tensorflow as tf
 from tensorflow.contrib.learn.python.learn.datasets.mnist import DataSet
 
-
-def composeAll(*args):
-    """Util for multiple function composition
-
-    i.e. composed = composeAll([f, g, h])
-         composed(x) == f(g(h(x)))
-    """
-    # adapted from https://docs.python.org/3.1/howto/functional.html
-    return partial(functools.reduce, compose)(*args)
 
 def print_(var, name: str, first_n=5, summarize=5):
     """Util for debugging, by printing values of tf.Variable `var` during training"""
@@ -90,7 +80,6 @@ def random_subset(images, size, labels=None, same_num_labels=False):
     :param same_num_labels: bool, weather to return equal number of sampels per label
     """
     assert labels is not None or not same_num_labels, 'no labels given for same_num_labels==True'
-    assert images.ndim == 2, 'datasets.images need to be reshaped to (N, W*H)'
     new_labels = []
     if same_num_labels:
         if labels.ndim == 1 or labels.shape[1] == 1:

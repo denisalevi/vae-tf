@@ -12,7 +12,7 @@ from tensorflow.contrib.tensorboard.plugins import projector
 from tensorflow.contrib import layers
 
 import plot
-from utils import composeAll, print_, images_to_sprite
+from utils import print_, images_to_sprite
 from vae import VAE
 
 def build_encoder(self, x, dropout=1, output_size=10):

@@ -10,7 +10,7 @@ from tensorflow.contrib.tensorboard.plugins import projector
 from tensorflow.contrib import layers
 
 import plot
-from utils import composeAll, print_, images_to_sprite, variable_summaries, get_deconv_params
+from utils import print_, images_to_sprite, variable_summaries, get_deconv_params
 
 
 class VAE():
@@ -246,9 +246,9 @@ class VAE():
     def _build_encoder(self, x, dropout=1, verbose=True):
         # TODO why make a copy?
         encoder = tf.identity(x)
-        if self.hidden_layers[0] == 'convolution':
-            # for convolutional VAE we need to reshape the input
-            encoder = tf.reshape(encoder, [-1, self.img_dims[0], self.img_dims[1], 1])
+        if self.hidden_layers[0] == 'fully_connected':
+            # for fully connected VAE we need to reshape the input
+            encoder = tf.reshape(encoder, [-1, self.img_dims[0] * self.img_dims[1]])
         self.encoder_in_shapes = []
         for layer, params in zip(self.hidden_layers, self.hidden_params):
             # save encoder input shape as decoder output shape
@@ -259,11 +259,6 @@ class VAE():
                     # we had a CONV before
                     raise NotImplementedError('Currently fully connected layers after '
                                               'convolutional layers are not supported!')
-                    # TODO: flatten input to avoid broadcasting over channel dimension?
-                    #print('WARNING: applying FC layer on rank 4 input (unflattened '
-                    #      'convolutional layer output?). FC layer matmul will be broadcastes '
-                    #      'over channel dimension. See np.tensordot(input, kernels, '
-                    #      '[[num_channels], [0]])')
                 assert len(in_shape) == 1
                 encoder = layers.fully_connected(encoder, **params)
                 encoder = tf.nn.dropout(encoder, dropout)
@@ -341,12 +336,14 @@ class VAE():
             else:
                 assert False, 'got something other then fc or conv string'
 
-        return layers.flatten(decoder)
+        if self.hidden_layers[0] == 'fully_connected':
+            # for fully connected VAE we need to reshape the output
+            decoder = tf.reshape(decoder, [-1, self.img_dims[0], self.img_dims[1], 1])
+        return decoder
 
     def _buildGraph(self):
         x_in = tf.placeholder(tf.float32, shape=[None, # enables variable batch size
-                                                 np.prod(self.img_dims)], name="x")
-                                                 #self.architecture[0]], name="x")
+                                                 *self.img_dims, 1], name="x")
         dropout = tf.placeholder_with_default(1., shape=[], name="dropout")
 
         # encoding / "recognition": q(z|x)
@@ -385,7 +382,9 @@ class VAE():
         with tf.name_scope("cost"):
             # reconstruction loss: mismatch b/w x & x_reconstructed
             # binary cross-entropy -- assumes x & p(x|z) are iid Bernoullis
-            rec_loss = tf.reduce_mean(VAE.crossEntropy(x_reconstructed, x_in))
+            x_reconstructed_flat = layers.flatten(x_reconstructed)
+            x_in_flat = layers.flatten(x_in)
+            rec_loss = tf.reduce_mean(VAE.crossEntropy(x_reconstructed_flat, x_in_flat))
             tf.summary.scalar('reconstruction_loss', rec_loss)
 
             # Kullback-Leibler divergence: mismatch b/w approximate vs. imposed/true posterior
@@ -619,6 +618,7 @@ class VAE():
                 i_since_last_print = 0
                 err_train = 0
                 x, _ = X.train.next_batch(self.batch_size)
+                x = x.reshape([self.batch_size, 28, 28, 1])
                 feed_dict = {self.x_in: x, self.dropout_: self.dropout}
 
                 ### TRAINING
@@ -647,6 +647,7 @@ class VAE():
                     validation_cost = 0
                     for n in range(num_batches_validation):
                         x, _ = X.validation.next_batch(self.batch_size)
+                        x = x.reshape([self.batch_size, 28, 28, 1])
                         feed_dict = {self.x_in: x}
                         fetches = [self.merged_summaries, self.x_reconstructed, self.cost]
                         summary, x_reconstructed, cost = self.sesh.run(fetches, feed_dict)

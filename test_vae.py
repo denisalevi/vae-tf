@@ -29,15 +29,12 @@ HYPERPARAMS = {
     "squashing": tf.nn.sigmoid
 }
 
-MAX_ITER = np.inf
-MAX_EPOCHS = np.inf
-
 LOG_DIR = "/tmp/test_log"
 PLOTS_DIR = "/tmp/test_plots"
 
-def load_mnist(**kwargs):
+def load_mnist(reshape=False, **kwargs):
     from tensorflow.examples.tutorials.mnist import input_data
-    return input_data.read_data_sets("./mnist_data", **kwargs)
+    return input_data.read_data_sets("./mnist_data", reshape=reshape, **kwargs)
 
 def create_dirs():
     for DIR in (LOG_DIR, PLOTS_DIR):

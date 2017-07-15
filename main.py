@@ -37,9 +37,9 @@ LOG_DIR = "./log"
 PLOTS_DIR = "./png"
 
 
-def load_mnist():
+def load_mnist(reshape=False, **kwargs):
     from tensorflow.examples.tutorials.mnist import input_data
-    return input_data.read_data_sets("./mnist_data")
+    return input_data.read_data_sets("./mnist_data", reshape=reshape, **kwargs)
 
 def all_plots(model, mnist):
     if model.architecture[-1] == 2: # only works for 2-D latent
