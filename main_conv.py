@@ -7,7 +7,9 @@ import tensorflow as tf
 
 import plot
 from utils import get_mnist
-import conv_vae as vae
+#import conv_vae as vae
+import vae
+from tf_cnnvis import activation_visualization, deconv_visualization, deepdream_visualization
 
 
 # suppress tf log
@@ -16,12 +18,14 @@ os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
 IMG_DIM = 28
 
 ARCHITECTURE = [IMG_DIM**2, # 784 pixels
-#                ((5, 5), 32),
-#                ((5, 5), 64),
-                #1024,
-                500, 500, # intermediate encoding
+                #(32, 5, 2, 'SAME'),
+                #(64, 5, 2, 'SAME'),
+                #(128, 5, 2, 'VALID'),
+                (20, 5, 2, 'SAME'),
+                (50, 5, 2, 'SAME'),
+                (70, 5, 2, 'SAME'),
+                (100, 5, 2, 'SAME'),
                 10] # latent space dims
-                # 50]
 # (and symmetrically back out again)
 
 HYPERPARAMS = {
@@ -42,9 +46,9 @@ LOG_DIR = "./log_CNN"
 PLOTS_DIR = "./png_CNN"
 
 
-def load_mnist():
+def load_mnist(**kwargs):
     from tensorflow.examples.tutorials.mnist import input_data
-    return input_data.read_data_sets("./mnist_data")
+    return input_data.read_data_sets("./mnist_data", **kwargs)
 
 def all_plots(model, mnist):
     if model.architecture[-1] == 2: # only works for 2-D latent
@@ -118,8 +122,45 @@ def main(to_reload=None):
         v.create_embedding(mnist.test.images, labels=mnist.test.labels, label_names=None,
                            sample_latent=True, latent_space=True, input_space=True,
                            image_dims=(28, 28))
-        out = v.vae(mnist.test.images[:1])
-        print('OUT SHAPE', out.shape)
+
+        conv_layers = []
+        deconv_layers = []
+        #types = {}
+        for i in v.sesh.graph.get_operations():
+#            if i.type.lower() not in types:
+#                types[i.type.lower()] = i.name
+            if i.type.lower() == 'conv2d':# biasadd, elu, relu, conv2dbackpropinput
+                if 'optimizer' in i.name:
+                    print('Skipping filter visualization for {}'.format(i.name))
+                    conv_layers.append(i.name)
+            elif i.type.lower() == 'conv2dbackpropinput':
+                if 'optimizer' in i.name:
+                    print('Skipping filter visualization for {}'.format(i.name))
+                elif not i.name.startswith('decoding_1'):
+                    deconv_layers.append(i.name)
+
+#        print('TYPES')
+#        for k, va in types.items():
+#            print(k, '\t', va)
+
+        meta_graph = '.'.join([v.final_checkpoint, 'meta'])
+
+        activation_visualization(graph_or_path=meta_graph,
+                                 value_feed_dict={v.x_in: mnist.test.images[:1]},
+                                 layers=conv_layers + deconv_layers,#['c'],
+                                 path_logdir=os.path.join(v.log_dir, 'viz'))
+                                 #path_outdir=v.log_dir)
+        deconv_visualization(graph_or_path=meta_graph,
+                             value_feed_dict={v.x_in: mnist.test.images[:1]},
+                             layers=conv_layers,#['c'],
+                             path_logdir=os.path.join(v.log_dir, 'viz'))
+                             #path_outdir=v.log_dir)
+        deepdream_visualization(graph_or_path=meta_graph,
+                                value_feed_dict={v.x_in: mnist.test.images[:1]},
+                                layer='encoding/Conv_3/convolution',
+                                classes=[1, 2, 3, 4, 5],
+                                path_logdir=os.path.join(v.log_dir, 'viz'))
+
 
     all_plots(v, mnist)
 
@@ -152,9 +193,3 @@ if __name__ == "__main__":
     #arch = np.array(sys.argv[1:], dtype=np.int)
     #ARCHITECTURE = [IMG_DIM**2] + list(arch)
     #main()
-
-#    try:
-#        to_reload = sys.argv[1]
-#        main(to_reload=to_reload)
-#    except IndexError:
-#        main()
