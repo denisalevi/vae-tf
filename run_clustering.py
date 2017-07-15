@@ -20,7 +20,8 @@ parser.add_argument('--beta', nargs=1, type=float,
                     help='If given, this values will be written to the accuracies.txt file')
 parser.add_argument('--arch', nargs='*', type=int,
                     help='If given, this list will be written to the accuracies.txt file')
-parser.add_argument('--save', type=str, help='Where to save accuracies (appending)')
+parser.add_argument('--save', type=str, default='./accuracies.txt',
+                    help='Where to save accuracies (appending)')
 parser.add_argument('--cluster_test', action='store_true',
                     help='Classify by clustering encoded test data (network trained on train data)')
 parser.add_argument('--cluster_test_in', action='store_true',
@@ -47,12 +48,8 @@ META_GRAPH = log_folders[-1]
 # load mnist datasets
 mnist = load_mnist()
 
-# load trained VAE from last checkpoint (assuming only one to be there)
-checkpoints = glob.glob(META_GRAPH + '/*.meta')
-assert len(checkpoints) >> 0, 'no checkpoint file in log directory {}'.format(META_GRAPH)
-assert len(checkpoints) == 1, 'multiple checkpoint files in log directory'
-last_ckpt_name = os.path.basename(checkpoints[0]).split('.')[0]
-last_ckpt_path = os.path.abspath(os.path.join(META_GRAPH, last_ckpt_name))
+# load trained VAE from last checkpoint
+last_ckpt_path = os.path.abspath(tf.train.latest_checkpoint(META_GRAPH))
 
 for _ in range(args.repeat):
     tf.reset_default_graph()
