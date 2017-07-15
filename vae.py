@@ -10,7 +10,7 @@ from tensorflow.contrib.tensorboard.plugins import projector
 from tensorflow.contrib import layers
 
 import plot
-from utils import composeAll, print_, images_to_sprite, variable_summaries
+from utils import composeAll, print_, images_to_sprite, variable_summaries, get_deconv_params
 
 
 class VAE():
@@ -28,9 +28,9 @@ class VAE():
         "squashing": tf.nn.sigmoid,
         # TODO add beta to file name
         "beta": 1.0,
+        "img_dims": (28, 28),
         "weights_initializer": layers.xavier_initializer(),
         "biases_initializer": tf.zeros_initializer(),
-        "conv_filter_initializer": None,  # None is default
     }
     RESTORE_KEY = "to_restore"
 
@@ -40,7 +40,18 @@ class VAE():
 
             * architecture (list of nodes per encoder layer); e.g.
                [1000, 500, 250, 10] specifies a VAE with 1000-D inputs, 10-D latents,
-               & end-to-end architecture [1000, 500, 250, 10, 250, 500, 1000]
+               & end-to-end architecture [1000, 500, 250, 10, 250, 500, 1000] (fully connected)
+
+               To specify convolutinal layers, specify
+               [num_filters, filter_shape, stride_shape, padding], where stride_shape and
+               padding are optional (default to stride=(1,1), padding='SAME'). filter_shape
+               and stride_shape must be tuple or int (assuming same in both dimensions).
+
+               [1000, [32, (5,5), (1,1), 'SAME'], 10] specifies a VAE with 1000-D inputs,
+               10-D latents space and a convolutional layer with 32 5x5 filters, stride (1, 2)
+               and padding='SAME'. Using the default, [32, 5] would spcify the same layer. The
+               deconvolution layer parameters are chosen such that the output dimensions fit
+               the encoders input dimensions (possibly changing filter_shape and/or stride_shape).
 
             * hyperparameters (optional dictionary of updates to `DEFAULTS`)
         """
@@ -137,28 +148,28 @@ class VAE():
             elif isinstance(layer, (tuple, list)): # convolutional layer
                 #err_msg = 'architecture[{}][0] must be list or tuple, is {}'.format(n+1, type(layer[0]))
                 #assert isinstance(layer[0], tuple), err_msg
-                # layer format: [num_filters, filter_shape, strides, padding]
+                # layer format: [num_filters, filter_shape, stride, padding]
                 hidden_layers.append('convolution')
 
                 # extract the convolutional parameters
                 if len(layer) == 4:
-                    num_filters, filter_shape, strides, padding = layer
+                    num_filters, filter_shape, stride, padding = layer
                 elif len(layer) == 3:
                     num_filters, filters_shape, tmp = layer
                     err_msg = 'architecture[{}][2] must be str, int or tuple(int), is {}'.format(n+1, type(tmp))
                     if isinstance(tmp, str):
                         padding = tmp
-                        strides = (1, 1)  # default
+                        stride = (1, 1)  # default
                     elif isinstance(tmp, (tuple, int)):
-                        strides = tmp
+                        stride = tmp
                         padding = 'SAME'  # default
-                        if isinstance(strides, tuple) and not all([isinstance(s, int) for s in strides]):
+                        if isinstance(stride, tuple) and not all([isinstance(s, int) for s in stride]):
                             raise ValueError(err_msg)
                     else:
                         raise ValueError(err_msg)
                 elif len(layer) == 2:
                     num_filters, filter_shape = layer
-                    strides = (1, 1)  # default
+                    stride = (1, 1)  # default
                     padding = 'SAME'  # default
                 else:
                     raise ValueError('architecture[{}] (convolutional layer) must have lentgth 2, 3 or 4'
@@ -167,30 +178,29 @@ class VAE():
                 err_msg = 'architecture[{}][{}] needs to be one of {}, but is {}'
                 assert isinstance(num_filters, int), err_msg.format(n+1, 0, (int), type(num_filters))
                 assert isinstance(filter_shape, (int, tuple)), err_msg.format(n+1, 1, (int, tuple), type(filter_shape))
-                assert isinstance(strides, (int, tuple)), err_msg.format(n+1, 1, (int, tuple), type(strides))
+                assert isinstance(stride, (int, tuple)), err_msg.format(n+1, 1, (int, tuple), type(stride))
 
                 filter_shape = filter_shape if isinstance(filter_shape, tuple) else (filter_shape, filter_shape)
-                strides = strides if isinstance(strides, tuple) else (strides, strides)
+                stride = stride if isinstance(stride, tuple) else (stride, stride)
 
 
                 # convolutional layer name format: ..._conv-NxF1xF2-S1xS2-P_...
-                # where N - num_filters, F1/2 - filter_shape, S1/2 - strides, P - padding ('S' for 'SAME', 'V' for 'VALID')
+                # where N - num_filters, F1/2 - filter_shape, S1/2 - stride, P - padding ('S' for 'SAME', 'V' for 'VALID')
                 layer_names.append('conv-'
                                    # filter shape ('NxF1xF2')
                                    + 'x'.join([str(num_filters)] + list(map(str, filter_shape))) + '-'
-                                   # strides ('S1xS2')
-                                   + 'x'.join((list(map(str, strides)))) + '-'
+                                   # stride ('S1xS2')
+                                   + 'x'.join((list(map(str, stride)))) + '-'
                                    # padding ('S' or 'V')
                                    + 'S' if padding.lower() == 'same' else 'V')
 
-                hidden_params.append({'filters': num_filters,
+                hidden_params.append({'num_outputs': num_filters,
                                       'kernel_size': filter_shape,
-                                      'strides': strides,
+                                      'stride': stride,
                                       'padding': padding,
-                                      'activation': self.nonlinearity,
+                                      'activation_fn': self.nonlinearity,
                                       'weights_initializer': self.weights_initializer,
-                                      'biases_initializer': self.biases_initializer,
-                                      'kernel_initializer': self.conv_filter_initializer})
+                                      'biases_initializer': self.biases_initializer})
             else:
                 raise ValueError("architecure[{}]={} not understood. "
                                  "Has to be int (Dense) or tuple (Convolutional).".format(n+1, layer))
@@ -211,13 +221,13 @@ class VAE():
                 architecture.append(num_outputs)
             elif layer_type == 'conv':
                 assert len(layer_params) == 3
-                filters, strides, padding = layer_params
+                filters, stride, padding = layer_params
                 num_filters, *filter_shape = filters.split('x')
                 num_filters = int(num_filters)
                 filter_shape = tuple([int(f) for f in filter_shape])
-                strides = tuple([int(s) for s in strides.split('x')])
+                stride = tuple([int(s) for s in stride.split('x')])
                 padding = 'SAME' if padding == 'S' else 'VALID'
-                architecture.append([num_filters, filter_shape, strides, padding])
+                architecture.append([num_filters, filter_shape, stride, padding])
             elif len(layer_params) == 0:
                 # old naming without fc- / conv- but only int (fully connected)
                 num_outputs = int(layer_type)
@@ -233,46 +243,110 @@ class VAE():
         """Train step"""
         return self.global_step.eval(session=self.sesh)
 
-    def _build_encoder(self, x, dropout=1):
+    def _build_encoder(self, x, dropout=1, verbose=True):
         # TODO why make a copy?
         encoder = tf.identity(x)
-        for arch in self.architecture[1:-1]:
-            encoder = layers.fully_connected(
-                inputs=encoder,
-                num_outputs=arch,
-                activation_fn=self.nonlinearity,
-                weights_initializer=layers.xavier_initializer(),
-                biases_initializer=tf.zeros_initializer())
-                #biases_initializer=layers.constant_initializer(0.001),
-            encoder = tf.nn.dropout(encoder, dropout)
-        return encoder
+        if self.hidden_layers[0] == 'convolution':
+            # for convolutional VAE we need to reshape the input
+            encoder = tf.reshape(encoder, [-1, self.img_dims[0], self.img_dims[1], 1])
+        self.encoder_in_shapes = []
+        for layer, params in zip(self.hidden_layers, self.hidden_params):
+            # save encoder input shape as decoder output shape
+            in_shape = encoder.get_shape().as_list()[1:]
+            self.encoder_in_shapes.append(in_shape)
+            if layer == 'fully_connected':
+                if len(in_shape) == 4:
+                    # we had a CONV before
+                    raise NotImplementedError('Currently fully connected layers after '
+                                              'convolutional layers are not supported!')
+                    # TODO: flatten input to avoid broadcasting over channel dimension?
+                    #print('WARNING: applying FC layer on rank 4 input (unflattened '
+                    #      'convolutional layer output?). FC layer matmul will be broadcastes '
+                    #      'over channel dimension. See np.tensordot(input, kernels, '
+                    #      '[[num_channels], [0]])')
+                assert len(in_shape) == 1
+                encoder = layers.fully_connected(encoder, **params)
+                encoder = tf.nn.dropout(encoder, dropout)
+                if verbose:
+                    print("FC\n\tnum outputs {}\n\t output {}".format(
+                            params["num_outputs"], encoder.get_shape().as_list()
+                          ))
+            elif layer == 'convolution':
+                if len(in_shape) == 1:
+                    # we had a FC before
+                    print('in shape', in_shape)
+                    raise NotImplementedError('Currently convolutional layers after fully '
+                                              'connected layers are not supported!')
+                assert len(in_shape) == 3
+                encoder = layers.conv2d(encoder, **params)
+                if verbose:
+                    print("CONV\n\tnum filters {}\n\tfilter shape {}\n\tstride {}\n\tpadding {}"
+                          "\n\tinput {}\n\toutput {}".format(
+                              params["num_outputs"], params["kernel_size"], params["stride"],
+                              params["padding"], in_shape, encoder.get_shape().as_list()[1:]
+                          ))
 
-    def _build_decoder(self, z, dropout=1):
+        # also save intput shape for latent space (output of first decoder layer)
+        self.encoder_in_shapes.append(encoder.get_shape().as_list()[1:])
+
+        return layers.flatten(encoder)
+
+    def _build_decoder(self, z, dropout=1, verbose=True):
         # TODO why make a copy?
         decoder = tf.identity(z)
-        for arch in self.architecture[-2:0:-1]:
-            decoder = layers.fully_connected(
-                inputs=decoder,
-                num_outputs=arch,
-                activation_fn=self.nonlinearity,
-                weights_initializer=layers.xavier_initializer(),
-                biases_initializer=tf.zeros_initializer())
-                #biases_initializer=layers.constant_initializer(0.001),
-            decoder = tf.nn.dropout(decoder, dropout)
-        # final reconstruction: restore original dims, squash outputs [0, 1]
-        # prepend as outermost function
-        decoder = layers.fully_connected(
-            inputs=decoder,
-            num_outputs=self.architecture[0],
-            activation_fn=self.squashing,
-            weights_initializer=layers.xavier_initializer(),
-            biases_initializer=tf.zeros_initializer())
-            #biases_initializer=layers.constant_initializer(0.001),
-        return decoder
+        # first layer out from latent space (TODO could also be convolutional layer)
+        decoder = layers.fully_connected(decoder,
+                                         num_outputs=int(np.prod(self.encoder_in_shapes[-1])),
+                                         activation_fn=self.nonlinearity,
+                                         weights_initializer=self.weights_initializer,
+                                         biases_initializer=self.biases_initializer)
+        decoder = layers.dropout(decoder, keep_prob=dropout)
+
+        # reshape to equal last encoder hidden layer [batches, height, width, channels]
+        decoder = tf.reshape(decoder, [-1] + self.encoder_in_shapes[-1])
+
+        for layer, params, out_shape in zip(reversed(self.hidden_layers),
+                                            reversed(self.hidden_params),
+                                            reversed(self.encoder_in_shapes[:-1])):
+            decoder_params = params.copy()
+            if layer == 'fully_connected':
+                assert len(out_shape) == 1
+                # change num outputs to output shape of decoder (input shape of encoder)
+                decoder_params["num_outputs"] = out_shape[0]
+                decoder = layers.fully_connected(decoder, **decoder_params)
+                if verbose:
+                    print("FC\n\tnum outputs {}\n\t output {}".format(
+                              out_shape[0], decoder.get_shape().as_list()
+                          ))
+            elif layer == 'convolution':
+                assert len(out_shape) == 3
+                # change num filters of decoder to number of channels of encoder
+                decoder_params["num_outputs"] = out_shape[-1]
+                # calculate filter, stride and padding to get desired output shape
+                in_shape = decoder.get_shape().as_list()[1:3]
+                filter_shape, stride_shape, padding = get_deconv_params(
+                    out_shape[:-1], in_shape, params["kernel_size"], params["stride"])
+                decoder_params["kernel_size"] = filter_shape
+                decoder_params["stride"] = stride_shape
+                decoder_params["padding"] = padding
+                decoder = layers.conv2d_transpose(decoder, **decoder_params)
+                for a, b in zip(out_shape, decoder.get_shape().as_list()[1:]):
+                    assert a == b, 'deconvolution output shape is wrong'
+                if verbose:
+                    print("DECONV\n\tnum filters {}\n\tfilter shape {}\n\tstride {}\n\tpadding {}"
+                          "\n\tdesired output {}\n\tactual output {}".format(
+                              out_shape[-1], filter_shape, stride_shape, padding, out_shape[:-1],
+                              decoder.get_shape().as_list()[1:]
+                          ))
+            else:
+                assert False, 'got something other then fc or conv string'
+
+        return layers.flatten(decoder)
 
     def _buildGraph(self):
         x_in = tf.placeholder(tf.float32, shape=[None, # enables variable batch size
-                                                 self.architecture[0]], name="x")
+                                                 np.prod(self.img_dims)], name="x")
+                                                 #self.architecture[0]], name="x")
         dropout = tf.placeholder_with_default(1., shape=[], name="dropout")
 
         # encoding / "recognition": q(z|x)
@@ -342,7 +416,7 @@ class VAE():
                                              shape=[None, self.architecture[-1]],
                                              name="latent_in")
         with tf.variable_scope("decoding", reuse=True):
-            x_decoded = self._build_decoder(z_in, dropout=dropout)
+            x_decoded = self._build_decoder(z_in, dropout=dropout, verbose=False)
 
         # create summaries of weights and biases
         for var in tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES):

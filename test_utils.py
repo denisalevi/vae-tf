@@ -1,7 +1,7 @@
 import numpy as np
-from numpy.testing import assert_equal
+from numpy.testing import assert_equal, assert_array_equal
 
-from utils import random_subset
+from utils import random_subset, get_deconv_params
 from main import load_mnist
 
 
@@ -39,5 +39,50 @@ def test_random_subset():
     im4, lab4 = random_subset(images, 100, labels=double_labels)
     assert_equal(lab4.shape, (100, 2))
 
+def test_get_deconv_params():
+    stride = (2, 2)
+    filters = (5, 5)
+    out_shape = (4, 4)
+    in_shape = (1, 1)
+    # should use 'VALID' padding since in > filter
+    new_filter, new_stride, padding = get_deconv_params(out_shape, in_shape, filters, stride)
+    assert_array_equal(new_filter, [4, 4])
+    assert_array_equal(new_stride, [2, 2])
+    assert_equal(padding, 'VALID')
+
+    in_shape = (7, 7)
+    out_shape = (14, 14)
+    # should use 'SAME' padding since in < filter and out % in == 0
+    new_filter, new_stride, padding = get_deconv_params(out_shape, in_shape, filters, stride)
+    assert_array_equal(new_filter, [5, 5])
+    assert_array_equal(new_stride, [2, 2])
+    assert_equal(padding, 'SAME')
+
+    in_shape = (7, 7)
+    out_shape = (12, 12)
+    # should use 'VALID' padding since out % in != 0 and decrease stride since otherwise s > k
+    new_filter, new_stride, padding = get_deconv_params(out_shape, in_shape, filters, stride)
+    assert_array_equal(new_filter, [6, 6])
+    assert_array_equal(new_stride, [1, 1])
+    assert_equal(padding, 'VALID')
+
+    in_shape = (7, 1)
+    out_shape = (14, 4)
+    # should use 'VALID' padding since one dimension has in < filter
+    new_filter, new_stride, padding = get_deconv_params(out_shape, in_shape, filters, stride)
+    assert_array_equal(new_filter, [2, 4])
+    assert_array_equal(new_stride, [2, 2])
+    assert_equal(padding, 'VALID')
+
+    in_shape = (7, 1)
+    out_shape = (12, 4)
+    # should use 'VALID' padding since one dimension has in < filter and decrease stride
+    # in only that dimension since otherwise s > k, while not decreasing the other dims stride
+    new_filter, new_stride, padding = get_deconv_params(out_shape, in_shape, filters, stride)
+    assert_array_equal(new_filter, [6, 4])
+    assert_array_equal(new_stride, [1, 2])
+    assert_equal(padding, 'VALID')
+
+
 if __name__ == '__main__':
-    test_random_subset()
+    test_get_deconv_params()
