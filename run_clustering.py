@@ -43,7 +43,7 @@ log_folders.sort(key=os.path.getmtime)
 META_GRAPH = log_folders[-1]
 
 # specify log folder manually
-#META_GRAPH = './log/170622_1936_vae_784_500_500_10/'
+#META_GRAPH = './log_CNN/170713_1213_vae_784_conv-20x5x5-2x2-S_conv-50x5x5-2x2-S_conv-70x5x5-2x2-S_conv-100x5x5-2x2-S_10/'
 
 # load mnist datasets
 mnist = load_mnist()
@@ -77,8 +77,10 @@ for _ in range(args.repeat):
 
     if args.cluster_test_in:
         # do clustering in input space
+        shape = mnist.test.images.shape
+        test_images = mnist.test.images.reshape((shape[0], shape[1] * shape[2] * shape[3]))
         cluster_test_in = hierarchical_clustering(
-            mnist.test.images, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
+            test_images, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
             plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
             num_clusters=10, max_dist=None, true_labels=mnist.test.labels
         )
@@ -131,13 +133,12 @@ for _ in range(args.repeat):
 
     label = []
     if args.arch:
-        label.append(str(arbs.arch))
+        label.append(str(args.arch))
 
     if args.beta:
-        label.append(str(args.beta))
+        label.append(str(args.beta[0]))
 
     label = '\t'.join(label)
-    print(label)
 
     with open(args.save, 'a') as log_file:
         txt = '{}\t{}\t{}\t{}\n'.format(label, accuracy, accuracy2, accuracy_in)

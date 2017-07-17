@@ -128,30 +128,93 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
             label_fractions.append(fractions)
             highest_label_fractions.append(fractions.max())
 
-        # assign labels in order of their "condidence" (highest_label_fraction)
+        # assign labels in order of their "confidence" (highest_label_fraction)
         sort_idx = np.argsort(highest_label_fractions)[::-1]
+        sorted_highest_label_fractions = list(np.array(highest_label_fractions)[sort_idx])
+        sorted_unique_cluster_indices = list(unique_cluster_indices[sort_idx])
         cluster_labels = - np.ones(cluster_indices.shape)
         used_labels = {}
-        for idx in unique_cluster_indices[sort_idx]:
-            fractions = label_fractions[idx-1]
-            label_options = fractions.argsort()[::-1]
-            for label in label_options:
+        # sort label_options in descending order
+        label_options_per_cluster = [list(fractions.argsort()[::-1]) for fractions in label_fractions]
+        # outer loop through cluster indices
+        num_iter_outer = len(sorted_unique_cluster_indices)
+        # offset in label_options array for each cluster (see below)
+        idx_offsets_in_label_options = [0] * num_iter_outer
+        print('num iter outer', num_iter_outer, 'num cluster', num_clusters)
+        for n, idx in enumerate(sorted_unique_cluster_indices):
+            idx -= 1  # cluster indices start at 1
+            fractions = label_fractions[idx]
+            highest_fraction = highest_label_fractions[idx]
+            #label_options = fractions.argsort()[::-1]
+            label_options = label_options_per_cluster[idx]
+            # inner loop through label options
+            offset = idx_offsets_in_label_options[n]
+            num_iter_inner = len(label_options) - offset
+            for m, label in enumerate(label_options[offset:]):
                 fraction = fractions[label]
                 if label not in used_labels.keys():
-                    cluster_labels[cluster_masks[idx-1]] = label
+                    cluster_labels[cluster_masks[idx]] = label
                     used_labels[label] = (idx, fraction)
-                    print('Cluster {} gets label {} with fraction '
-                          '{:.3f} (max {:.3f})'.format(idx, label, fraction,
+                    print('{}.{} Cluster {} gets label {} with fraction '
+                          '{:.3f} (max {:.3f})'.format(n, m, idx, label, fraction,
                                                        fractions.max()))
                     break
                 else:
                     other_idx, other_fraction = used_labels[label]
-                    #other_fractions = label_fractions[other_idx-1]
-                    print('\nWARNING: label {} already used\n'
+                    print('\n{}.{} WARNING: label {} already used\n'
                           '\t\t\tthis\tother\n'
                           '\tidx\t\t{}\t{}\n'
-                          '\tfraction\t{:.3f}\t{:.3f}\n'.format(label, idx,other_idx,
-                                                              fraction, other_fraction))
+                          '\tfraction\t{:.3f}\t{:.3f}\n'.format(n, m, label, idx, other_idx,
+                                                                fraction, other_fraction))
+                    assert other_fraction > fraction
+                    if n == num_iter_outer - 1:
+                        # last iteration of outer loop -> just loop through inner loop
+                        print('last iteration outer loop, continue inner')
+                        continue
+                    assert m < num_iter_inner - 1, \
+                            'Finished inner loop without cluster assignment'
+                    assert m<20 and n<20
+                    # make sure that the next assigned label is assigned to most confident
+                    # cluster (highest_label_fraction)
+                    next_idx = sorted_unique_cluster_indices[n+1]
+                    next_idx -= 1  # cluster indices start at 1
+                    next_idx_highest_fraction = highest_label_fractions[next_idx]
+                    this_idx_next_label = label_options[offset+m+1]
+                    this_idx_next_label_fraction = fractions[this_idx_next_label]
+                    if this_idx_next_label_fraction >= next_idx_highest_fraction:
+                        # continue with inner loop
+                        # (equivalent to inserting idx in outer loop at position 0)
+                        print('this idx next label fraction {} >= next idx highest fraction {}, continue inner'.format(
+                            this_idx_next_label_fraction, next_idx_highest_fraction
+                        ))
+                        continue
+                    else:
+                        # sorted_... variables are sorted in descending order ([::-1] -> ascending)
+                        # find position in ascending highest_label_fractions
+                        insert_position = np.searchsorted(sorted_highest_label_fractions[::-1],
+                                                          this_idx_next_label_fraction)
+                        # get position in descending highest_label_fractions
+                        insert_position = len(sorted_highest_label_fractions) - insert_position
+                        # insert cluster idx (note: starts at 1) into outer loop list
+                        sorted_unique_cluster_indices.insert(insert_position, idx+1)
+                        # insert fraction into highest label fraction list (for the position
+                        # search to still work next time we enter this code block)
+                        sorted_highest_label_fractions.insert(insert_position, this_idx_next_label_fraction)
+                        # keep track that our loop list just got bigger
+                        num_iter_outer += 1
+                        # next time skip labels up to the current label from label options
+                        offset += m + 1
+                        # insert the offset into the offset list
+                        idx_offsets_in_label_options.insert(insert_position, offset)
+                        # 
+                        # TODO what happens when we enter for same idx second time here?
+                        # delete labels up to the current label from label options
+                        #del label_options_per_cluster[idx][:m]
+                        print('\tReinserting this idx {} with next label fraction {:.3f} in outer loop at {}, break out of inner\n'.format(
+                            idx, this_idx_next_label_fraction, insert_position
+                        ))
+                        # and break out of inner loop
+                        break
         assert not any(cluster_labels == -1), 'Not all cluster_labels where set!'
     else:  # no true_labels given
         cluster_labels = cluster_indices - 1  # let indexing start at 0
