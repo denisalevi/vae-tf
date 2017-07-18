@@ -4,6 +4,7 @@ import os
 from matplotlib import pyplot as plt
 from scipy.cluster.hierarchy import dendrogram, linkage, cophenet, fcluster
 from scipy.spatial.distance import pdist
+from scipy.spatial import cKDTree, KDTree
 import numpy as np
 
 from vae import VAE
@@ -12,9 +13,17 @@ from main import load_mnist
 
 
 class ClusteringResults(object):
+
     def __init__(self, labels, centroids):
         self.labels = labels
         self.centroids = centroids
+
+    def assign_to_nearest_cluster(self, data, n_jobs=-1):
+        # classify test data by closest cluster centroid
+        kdtree = cKDTree(self.centroids)
+        #kdtree = KDTree(self.centroids)
+        distances, assignments = kdtree.query(data, n_jobs=n_jobs)
+        return assignments
 
 
 def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean',
@@ -107,7 +116,7 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
         cluster_indices = fcluster(Z, max_dist, criterion='distance')
         num_clusters = int(np.max(cluster_indices))
 
-    print('cluster indices', np.unique(cluster_indices))
+    #print('cluster indices', np.unique(cluster_indices))
     print('cluster idx count', np.bincount(cluster_indices))
     
     if true_labels is not None:
@@ -140,7 +149,6 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
         num_iter_outer = len(sorted_unique_cluster_indices)
         # offset in label_options array for each cluster (see below)
         idx_offsets_in_label_options = [0] * num_iter_outer
-        print('num iter outer', num_iter_outer, 'num cluster', num_clusters)
         for n, idx in enumerate(sorted_unique_cluster_indices):
             idx -= 1  # cluster indices start at 1
             fractions = label_fractions[idx]
@@ -169,11 +177,10 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
                     assert other_fraction > fraction
                     if n == num_iter_outer - 1:
                         # last iteration of outer loop -> just loop through inner loop
-                        print('last iteration outer loop, continue inner')
                         continue
                     assert m < num_iter_inner - 1, \
                             'Finished inner loop without cluster assignment'
-                    assert m<20 and n<20
+                    assert m<1000 and n<1000, 'Stuck in the loop? Bug?'
                     # make sure that the next assigned label is assigned to most confident
                     # cluster (highest_label_fraction)
                     next_idx = sorted_unique_cluster_indices[n+1]
@@ -184,7 +191,7 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
                     if this_idx_next_label_fraction >= next_idx_highest_fraction:
                         # continue with inner loop
                         # (equivalent to inserting idx in outer loop at position 0)
-                        print('this idx next label fraction {} >= next idx highest fraction {}, continue inner'.format(
+                        print('\tThis idx next label fraction >= next idx highest fraction, continue with next label.\n'.format(
                             this_idx_next_label_fraction, next_idx_highest_fraction
                         ))
                         continue
@@ -210,7 +217,7 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
                         # TODO what happens when we enter for same idx second time here?
                         # delete labels up to the current label from label options
                         #del label_options_per_cluster[idx][:m]
-                        print('\tReinserting this idx {} with next label fraction {:.3f} in outer loop at {}, break out of inner\n'.format(
+                        print('\tReinserting this idx {} with next label fraction {:.3f} in outer loop at {}.\n'.format(
                             idx, this_idx_next_label_fraction, insert_position
                         ))
                         # and break out of inner loop
