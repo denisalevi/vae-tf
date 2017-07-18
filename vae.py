@@ -100,7 +100,7 @@ class VAE():
             source_idx += 1
             unique_idx = 0
             while True:
-                self.log_dir = os.path.join(os.path.join(log_dir, ".."),
+                self.log_dir = os.path.join(os.path.dirname(os.path.normpath(log_dir)),
                                             "{}_reloaded_{}_{}_vae_{}".format(
                                                 model_datetime,
                                                 source_idx,
@@ -110,8 +110,8 @@ class VAE():
                 if not os.path.isdir(self.log_dir):
                     break
                 unique_idx += 1
-            self.datetime = model_datetime
 
+            self.datetime = model_datetime
             self.architecture = self.get_architecture_from_model_name(model_name)
 
             # rebuild graph
@@ -132,6 +132,7 @@ class VAE():
         self.validation_writer = tf.summary.FileWriter(self.validation_writer_dir)
 
     def get_new_layer_architecture(self, architecture):
+        """Get the correct tf.contrib.layer method and parameters from the architecure list"""
         hidden_layers = []
         hidden_params = []
         layer_names = [str(architecture[0])]
@@ -211,6 +212,7 @@ class VAE():
 
     @staticmethod
     def get_architecture_from_model_name(model_name):
+        """Extract architecture (as would be passed to self.__init__()) from model name string"""
         architecture = []
         layer_names = model_name.split("_")
         for name in layer_names:
@@ -261,7 +263,7 @@ class VAE():
                                               'convolutional layers are not supported!')
                 assert len(in_shape) == 1
                 encoder = layers.fully_connected(encoder, **params)
-                encoder = tf.nn.dropout(encoder, dropout)
+                encoder = layers.dropout(encoder, keep_prob=dropout)
                 if verbose:
                     print("FC\n\tnum outputs {}\n\t output {}".format(
                             params["num_outputs"], encoder.get_shape().as_list()
@@ -300,15 +302,20 @@ class VAE():
         # reshape to equal last encoder hidden layer [batches, height, width, channels]
         decoder = tf.reshape(decoder, [-1] + self.encoder_in_shapes[-1])
 
-        for layer, params, out_shape in zip(reversed(self.hidden_layers),
-                                            reversed(self.hidden_params),
-                                            reversed(self.encoder_in_shapes[:-1])):
+        for n, (layer, params, out_shape) in enumerate(zip(reversed(self.hidden_layers),
+                                                       reversed(self.hidden_params),
+                                                       reversed(self.encoder_in_shapes[:-1]))):
             decoder_params = params.copy()
+            if n == len(self.hidden_layers) - 1:
+                # last layer
+                decoder_params["activation_fn"] = self.squashing
+
             if layer == 'fully_connected':
                 assert len(out_shape) == 1
                 # change num outputs to output shape of decoder (input shape of encoder)
                 decoder_params["num_outputs"] = out_shape[0]
                 decoder = layers.fully_connected(decoder, **decoder_params)
+                decoder = layers.dropout(decoder, keep_prob=dropout)
                 if verbose:
                     print("FC\n\tnum outputs {}\n\t output {}".format(
                               out_shape[0], decoder.get_shape().as_list()
@@ -433,12 +440,18 @@ class VAE():
          self.x_reconstructed, self.z_in, self.x_decoded,
          self.cost, self.global_step, self.train_op) = handles
 
-    def sampleGaussian(self, mu, log_sigma):
-        """(Differentiably!) draw sample from Gaussian with given shape, subject to random noise epsilon"""
+    def sampleGaussian(self, mu, log_sigma, seed=None):
+        """(Differentiably!) draw sample from Gaussian with given shape,
+        subject to random noise epsilon
+
+        :param mu: Mean of Gaussian
+        :param log_sigma: Log standard deviation of Gaussian
+        :param seed: If set, makes noise repeatable across sessions (default=None).
+        """
         with tf.name_scope("sample_gaussian"):
             # reparameterization trick
-            epsilon = tf.random_normal(tf.shape(log_sigma), name="epsilon")
-            return mu + epsilon * tf.exp(log_sigma) # N(mu, I * sigma**2)
+            epsilon = tf.random_normal(tf.shape(log_sigma), name="epsilon", seed=seed)
+            return mu + epsilon * tf.exp(log_sigma)  # N(mu, I * sigma**2)
 
     def create_embedding(self, dataset, labels=None, label_names=None,
                          sample_latent=True, latent_space=True, input_space=True,
@@ -614,11 +627,10 @@ class VAE():
                 INCREMENT = 0.5
                 pow_ = 0
 
+            i_since_last_print = 0
+            err_train = 0
             while True:
-                i_since_last_print = 0
-                err_train = 0
                 x, _ = X.train.next_batch(self.batch_size)
-                x = x.reshape([self.batch_size, 28, 28, 1])
                 feed_dict = {self.x_in: x, self.dropout_: self.dropout}
 
                 ### TRAINING
@@ -639,6 +651,8 @@ class VAE():
                     # print average cost since last print
                     print("batch {} (epoch {}) --> cost (avg since last report): {}"
                           "".format(i_batch, X.train.epochs_completed, avg_cost))
+                    i_since_last_print = 0
+                    err_train = 0
 
                 ### VALIDATION
                 if cross_validate_every_n is not None and i_batch % cross_validate_every_n == 0:
@@ -647,7 +661,6 @@ class VAE():
                     validation_cost = 0
                     for n in range(num_batches_validation):
                         x, _ = X.validation.next_batch(self.batch_size)
-                        x = x.reshape([self.batch_size, 28, 28, 1])
                         feed_dict = {self.x_in: x}
                         fetches = [self.merged_summaries, self.x_reconstructed, self.cost]
                         summary, x_reconstructed, cost = self.sesh.run(fetches, feed_dict)
