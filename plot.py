@@ -103,13 +103,7 @@ def exploreLatent(model, nx=20, ny=20, range_=(-4, 4), ppf=False,
         from scipy.stats import norm
         DELTA = 1E-16 # delta to avoid +/- inf at 0, 1 boundaries
         zs = np.array([norm.ppf(np.clip(z, DELTA, 1 - DELTA)) for z in zs])
-    xes = [x.reshape([dim, dim]) for x in model.decode(z_row)]
-    hx = np.hstack(xes)
-    hx2 = np.stack(xes, axis=0)
-    hx3 = np.stack(xes, axis=1)
-    vx = np.stack(hx3, axis=0)
-    print('orig {}, hstack {}, stack0 {}, stack1 {}, stack1stack0 {}'.format(xes[0].shape, hx.shape, hx2.shape, hx3.shape, vs.shape))
-    canvas = np.vstack([np.hstack([])
+    canvas = np.vstack([np.hstack([x.reshape([dim, dim]) for x in model.decode(z_row)])
                         for z_row in iter(zs)])
 
     plt.figure(figsize=(nx / 2, ny / 2))
