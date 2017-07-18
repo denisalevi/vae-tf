@@ -1,5 +1,6 @@
 import os
 import sys
+import glob
 
 import numpy as np
 import tensorflow as tf
@@ -27,10 +28,11 @@ HYPERPARAMS = {
     "lambda_l2_reg": 1E-5,
     "nonlinearity": tf.nn.elu,
     "squashing": tf.nn.sigmoid,
-    "beta": 1.0
+    "beta": 1.0,
+    "img_dims": (28, 28)
 }
 
-MAX_ITER = np.inf#2000#2**16
+MAX_ITER = 40000#np.inf#2000#2**16
 MAX_EPOCHS = np.inf
 
 LOG_DIR = "./log"
@@ -75,7 +77,7 @@ def plot_all_in_latent(model, mnist):
 def interpolate_digits(model, mnist):
     imgs, labels = mnist.train.next_batch(100)
     idxs = np.random.randint(0, imgs.shape[0] - 1, 2)
-    mus, _ = model.encode(np.vstack(imgs[i] for i in idxs))
+    mus, _ = model.encode(np.stack([imgs[i] for i in idxs], axis=0))
     plot.interpolate(model, *mus, name="interpolate_{}->{}".format(
         *(labels[i] for i in idxs)), outdir=PLOTS_DIR)
 
@@ -93,7 +95,7 @@ def morph_numbers(model, mnist, ns=None, n_per_morph=10):
         import random
         ns = random.sample(range(10), 10) # non-in-place shuffle
 
-    xs = np.squeeze([get_mnist(n, mnist) for n in ns])
+    xs = np.stack([get_mnist(n, mnist) for n in ns])
     mus, _ = model.encode(xs)
     plot.morph(model, mus, n_per_morph=n_per_morph, outdir=PLOTS_DIR,
                name="morph_{}".format("".join(str(n) for n in ns)))
@@ -115,15 +117,18 @@ def main(to_reload=None):
                            image_dims=(28, 28))
 
     #all_plots(v, mnist)
+    plot_all_end_to_end(v, mnist)
 
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Run vae model')
-    parser.add_argument('--beta', nargs=1, type=float, default=HYPERPARAMS["beta"],
+    parser.add_argument('--beta', nargs=1, type=float, default=[HYPERPARAMS["beta"]],
                         help='beta value of betaVAE to use (default: 1.0)')
     parser.add_argument('--arch', nargs='*', type=int, default=ARCHITECTURE[1:],
                         help='decoder/encoder architecture to use')
+    parser.add_argument('--log_folder', default=None,
+                        help='where to store the tensorboard summaries')
     args = parser.parse_args()
 
     tf.reset_default_graph()
@@ -134,9 +139,21 @@ if __name__ == "__main__":
         except FileExistsError:
             pass
 
-    HYPERPARAMS["beta"] = args.beta
+    if args.log_folder:
+        LOG_DIR = 'log_' + args.log_folder
+        PLOTS_DIR = 'png_' + args.log_folder
+
+    HYPERPARAMS["beta"] = args.beta[0]
     ARCHITECTURE = [IMG_DIM**2] + args.arch
     main()
+
+    #print(sys.argv[1])
+    #beta = float(sys.argv[1])
+    #HYPERPARAMS["beta"] = beta
+    #main()
+    #arch = np.array(sys.argv[1:], dtype=np.int)
+    #ARCHITECTURE = [IMG_DIM**2] + list(arch)
+    #main()
 
 #    try:
 #        to_reload = sys.argv[1]
