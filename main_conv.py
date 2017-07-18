@@ -84,7 +84,7 @@ def plot_all_in_latent(model, mnist):
 def interpolate_digits(model, mnist):
     imgs, labels = mnist.train.next_batch(100)
     idxs = np.random.randint(0, imgs.shape[0] - 1, 2)
-    mus, _ = model.encode(np.vstack(imgs[i] for i in idxs))
+    mus, _ = model.encode(np.stack([imgs[i] for i in idxs]))
     plot.interpolate(model, *mus, name="interpolate_{}->{}".format(
         *(labels[i] for i in idxs)), outdir=PLOTS_DIR)
 
@@ -102,7 +102,7 @@ def morph_numbers(model, mnist, ns=None, n_per_morph=10):
         import random
         ns = random.sample(range(10), 10) # non-in-place shuffle
 
-    xs = np.squeeze([get_mnist(n, mnist) for n in ns])
+    xs = np.stack([get_mnist(n, mnist) for n in ns])
     mus, _ = model.encode(xs)
     plot.morph(model, mus, n_per_morph=n_per_morph, outdir=PLOTS_DIR,
                name="morph_{}".format("".join(str(n) for n in ns)))
@@ -132,7 +132,7 @@ def main(to_reload=None):
             if i.type.lower() == 'conv2d':# biasadd, elu, relu, conv2dbackpropinput
                 if 'optimizer' in i.name:
                     print('Skipping filter visualization for {}'.format(i.name))
-                    conv_layers.append(i.name)
+                conv_layers.append(i.name)
             elif i.type.lower() == 'conv2dbackpropinput':
                 if 'optimizer' in i.name:
                     print('Skipping filter visualization for {}'.format(i.name))
@@ -145,24 +145,25 @@ def main(to_reload=None):
 
         meta_graph = '.'.join([v.final_checkpoint, 'meta'])
 
-        activation_visualization(graph_or_path=meta_graph,
-                                 value_feed_dict={v.x_in: mnist.test.images[:1]},
-                                 layers=conv_layers + deconv_layers,#['c'],
-                                 path_logdir=os.path.join(v.log_dir, 'viz'))
-                                 #path_outdir=v.log_dir)
-        deconv_visualization(graph_or_path=meta_graph,
-                             value_feed_dict={v.x_in: mnist.test.images[:1]},
-                             layers=conv_layers,#['c'],
-                             path_logdir=os.path.join(v.log_dir, 'viz'))
-                             #path_outdir=v.log_dir)
-        deepdream_visualization(graph_or_path=meta_graph,
-                                value_feed_dict={v.x_in: mnist.test.images[:1]},
-                                layer='encoding/Conv_3/convolution',
-                                classes=[1, 2, 3, 4, 5],
-                                path_logdir=os.path.join(v.log_dir, 'viz'))
+#        activation_visualization(graph_or_path=meta_graph,
+#                                 value_feed_dict={v.x_in: mnist.test.images[:1]},
+#                                 layers=conv_layers + deconv_layers,#['c'],
+#                                 path_logdir=os.path.join(v.log_dir, 'viz'))
+#                                 #path_outdir=v.log_dir)
+#        deconv_visualization(graph_or_path=meta_graph,
+#                             value_feed_dict={v.x_in: mnist.test.images[:1]},
+#                             layers=conv_layers,#['c'],
+#                             path_logdir=os.path.join(v.log_dir, 'viz'))
+#                             #path_outdir=v.log_dir)
+#        deepdream_visualization(graph_or_path=meta_graph,
+#                                value_feed_dict={v.x_in: mnist.test.images[:1]},
+#                                layer='encoding/Conv_3/convolution',
+#                                classes=[1, 2, 3, 4, 5],
+#                                path_logdir=os.path.join(v.log_dir, 'viz'))
 
 
-    all_plots(v, mnist)
+    #all_plots(v, mnist)
+    plot_all_end_to_end(v, mnist)
 
 
 if __name__ == "__main__":
