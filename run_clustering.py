@@ -41,10 +41,34 @@ else:
 
 model_label = '\t'.join([str(args.arch), str(args.beta[0])])
 
-if not os.path.isfile(args.save):
-    with open(args.save, 'w') as log_file:
-        column_labels = '\t'.join(['arch', 'beta', 'clustering_latent', 'clustering_input', 'classification_latent_with_train_centroids'])
-        log_file.write(column_labels + '\n')
+savefile = args.save
+filename, ext = os.path.splitext(savefile)
+savefile_single_runs = filename + '_detailed' + ext
+
+if not os.path.isfile(savefile):
+    header_txt = '''# arch: architecture as used as parameter in VAE class in vae.py
+    # beta: beta value of beta-VAE
+    # stat: statistic (mean or std)
+    # num_runs: how many runs were used to calc mean and std
+    # cluster_test_latent: classification accuracy by clustering encoded test data (network trained on train data)
+    # cluster_test_input: classification accuracy by clustering test data in input space (without training or encoding)
+    # cluster_train_latent: classification accuracy by classifying encoded test data using centroids from clustering encoded train data'''
+    with open(savefile, 'w') as log_file:
+        column_labels = '\t'.join(['arch', 'beta', 'stat', 'num_runs',
+                                   'clust_test_latent',
+                                   'clust_test_input',
+                                   'clust_train_latent'])
+        log_file.write(header_txt + '\n' + column_labels + '\n')
+
+if not os.path.isfile(savefile_single_runs):
+    header_txt = '''# arch: architecture as used as parameter in VAE class in vae.py
+    # beta: beta value of beta-VAE
+    # cluster_test_latent: classification accuracy by clustering encoded test data (network trained on train data)
+    # cluster_test_input: classification accuracy by clustering test data in input space (without training or encoding)
+    # cluster_train_latent: classification accuracy by classifying encoded test data using centroids from clustering encoded train data'''
+    with open(savefile_single_runs, 'w') as log_file:
+        column_labels = '\t'.join(['arch', 'beta', 'clust_test_latent', 'clust_test_input', 'clust_train_latent'])#classification_latent_with_train_centroids'])
+        log_file.write(header_txt + '\n' + column_labels + '\n')
 
 # load most recently trained vae model (assuming it hasen't been first reloaded)
 log_folders = [path for path in glob.glob('./' + LOG_FOLDER + '/*') if not 'reloaded' in path]
@@ -159,11 +183,11 @@ for n in range(args.repeat):
                          sample_latent=True, latent_space=True, input_space=True,
                          image_dims=(28, 28))
 
-    with open(args.save, 'a') as log_file:
+    with open(savefile_single_runs, 'a') as log_file:
         txt = '{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(args.arch), str(args.beta[0]),
                                                         accuracy_cluster_test, accuracy_cluster_train,
                                                         accuracy_cluster_test_in)
-        print('Saving clustering accuracies in {}'.format(args.save))
+        print('Saving single run clustering accuracies in {}'.format(savefile_single_runs))
         log_file.write(txt)
 
 accuracy_mean = np.mean(accuracy_cluster_test_list)
@@ -173,9 +197,15 @@ accuracy_cluster_train_std = np.std(accuracy_cluster_train_list)
 accuracy_cluster_test_in_mean = np.mean(accuracy_cluster_test_in_list)
 accuracy_cluster_test_in_std = np.std(accuracy_cluster_test_in_list)
 
-with open(args.save, 'a') as log_file:
-    txt = '{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format('MEAN', accuracy_mean, accuracy_cluster_train_mean, accuracy_cluster_test_in_mean)
-    log_file.write(txt)
-with open(args.save, 'a') as log_file:
-    txt = '{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format('STD', accuracy_std, accuracy_cluster_train_std, accuracy_cluster_test_in_std)
-    log_file.write(txt)
+with open(savefile, 'a') as log_file:
+    mean_txt = '{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(args.arch), str(args.beta[0]), 'mean', args.repeat,
+                                                                 accuracy_mean,
+                                                                 accuracy_cluster_train_mean,
+                                                                 accuracy_cluster_test_in_mean)
+    log_file.write(mean_txt)
+    std_txt = '{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(args.arch), str(args.beta[0]), 'std', args.repeat,
+                                                                 accuracy_std,
+                                                                 accuracy_cluster_train_std,
+                                                                 accuracy_cluster_test_in_std)
+    log_file.write(std_txt)
+    print('Saved mean and std of clustering accuracies in {}'.format(savefile))
