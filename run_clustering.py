@@ -47,12 +47,12 @@ savefile_single_runs = filename + '_detailed' + ext
 
 if not os.path.isfile(savefile):
     header_txt = '''# arch: architecture as used as parameter in VAE class in vae.py
-    # beta: beta value of beta-VAE
-    # stat: statistic (mean or std)
-    # num_runs: how many runs were used to calc mean and std
-    # cluster_test_latent: classification accuracy by clustering encoded test data (network trained on train data)
-    # cluster_test_input: classification accuracy by clustering test data in input space (without training or encoding)
-    # cluster_train_latent: classification accuracy by classifying encoded test data using centroids from clustering encoded train data'''
+# beta: beta value of beta-VAE
+# stat: statistic (mean or std)
+# num_runs: how many runs were used to calc mean and std
+# cluster_test_latent: classification accuracy by clustering encoded test data (network trained on train data)
+# cluster_test_input: classification accuracy by clustering test data in input space (without training or encoding)
+# cluster_train_latent: classification accuracy by classifying encoded test data using centroids from clustering encoded train data'''
     with open(savefile, 'w') as log_file:
         column_labels = '\t'.join(['arch', 'beta', 'stat', 'num_runs',
                                    'clust_test_latent',
@@ -62,10 +62,10 @@ if not os.path.isfile(savefile):
 
 if not os.path.isfile(savefile_single_runs):
     header_txt = '''# arch: architecture as used as parameter in VAE class in vae.py
-    # beta: beta value of beta-VAE
-    # cluster_test_latent: classification accuracy by clustering encoded test data (network trained on train data)
-    # cluster_test_input: classification accuracy by clustering test data in input space (without training or encoding)
-    # cluster_train_latent: classification accuracy by classifying encoded test data using centroids from clustering encoded train data'''
+# beta: beta value of beta-VAE
+# cluster_test_latent: classification accuracy by clustering encoded test data (network trained on train data)
+# cluster_test_input: classification accuracy by clustering test data in input space (without training or encoding)
+# cluster_train_latent: classification accuracy by classifying encoded test data using centroids from clustering encoded train data'''
     with open(savefile_single_runs, 'w') as log_file:
         column_labels = '\t'.join(['arch', 'beta', 'clust_test_latent', 'clust_test_input', 'clust_train_latent'])#classification_latent_with_train_centroids'])
         log_file.write(header_txt + '\n' + column_labels + '\n')
