@@ -237,13 +237,39 @@ def fancy_dendrogram(*args, **kwargs):
     return ddata
 
 
-def plot_accuracies(filename, sort_by=None, index=None, kind='bar',
+def plot_accuracies(accuracy_file, sort_by=None, index=None, kind='bar',
                     plot_columns=None, save_figure=None, show_figure=True,
                     rot=60, alpha=0.8, **plot_kwargs):
-    """
-    sort_by: {'arch', 'beta', 'clustering types'}, default None
-    """
-    df = pd.read_csv(filename, delimiter='\t', index_col=[0, 1, 2], comment='#')
+    '''
+    Visualize accuracies from a log file created by run_clustering.py
+
+    Parameters
+    ----------
+    accuracy_file : str
+        File created by run_clustering.py (with mean and std of multiple runs)
+    sort_by : str, optional
+        What to sort accuracies by. Can be 'arch' for architecture, 'beta' for the beta-VAE
+        beta or any accuracy column name from the accuracy_file. Does not sort by default.
+    index : str or float, optional
+        Only plot a specified index from the accuracy matrix. Can be an architecture
+        (e.g. '[500, 500, 10]') or a beta value (e.g. 1.0), but not the same as specified
+        in sort_by.
+    kind : str, optional
+        What kind of plot to use (default 'bar'), will be passed to pandas.DataFrame.plot().
+    plot_columns : list(str), optional
+        Which accuracy columns form the accuracy file to plot. By default plots all columns.
+    save_figure : str, optional
+        What to save the plot as (default None, doen't save).
+    show_figure : bool, optional
+        Weather or not to show the figure after creation.
+    rot : int, optional
+        Rotation of xtick labels.
+    alpha : float, optional
+        Alpha value (transparency) of plot.
+    **plot_kwargs
+        Keyword arguments past to pandas.DataFrame.plot().
+    '''
+    df = pd.read_csv(accuracy_file, delimiter='\t', index_col=[0, 1, 2], comment='#')
     if index is not None:
         if sort_by == 'beta':
             idx_levels = ['arch']
@@ -283,7 +309,7 @@ def plot_accuracies(filename, sort_by=None, index=None, kind='bar',
             mean = df_mean_slice.sort_values(by=sort_by, ascending=False)
         else:
             raise ValueError("sort_by has to be 'arch', 'beta' or a column "
-                             "in filename, got {}".format(sort_by))
+                             "in accuracy_file, got {}".format(sort_by))
 
         # reindex std slice with indices from sorted mean slice
         std = df_std_slice.reindex(mean.index)
