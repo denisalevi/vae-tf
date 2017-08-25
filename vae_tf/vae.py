@@ -130,6 +130,8 @@ class VAE():
         self.validation_writer_dir = os.path.join(self.log_dir, 'validation')
         self.train_writer = tf.summary.FileWriter(self.train_writer_dir, self.sesh.graph)
         self.validation_writer = tf.summary.FileWriter(self.validation_writer_dir)
+        self.png_dir = os.path.join(self.log_dir, 'png')
+        os.mkdir(self.png_dir)
 
     def get_new_layer_architecture(self, architecture):
         """Get the correct tf.contrib.layer method and parameters from the architecure list"""
@@ -607,13 +609,16 @@ class VAE():
         return self.decode(self.sampleGaussian(*self.encode(x)))
 
     def train(self, X, max_iter=np.inf, max_epochs=np.inf, cross_validate_every_n=None,
-              verbose=True, save_final_state=True, plots_outdir="./png",
+              verbose=True, save_final_state=True, plots_outdir=None,
               plot_latent_over_time=False, plot_subsets_every_n=None,
               save_summaries_every_n=None, **kwargs):
         if 'save' in kwargs.keys():
             raise TypeError("The `save` keyword was renamed to `save_final_state`!")
         elif kwargs:
             raise TypeError("train() got an unexpected keyword argument: {}".format(list(kwargs.keys())[0]))
+
+        if plots_outdir is None:
+            plots_outdir = self.png_dir
 
         i_batch = 0
         avg_cost = None

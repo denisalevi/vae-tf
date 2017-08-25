@@ -40,7 +40,6 @@ MAX_ITER = 40000#np.inf#2000#2**16
 MAX_EPOCHS = np.inf
 
 LOG_DIR = "./log"
-PLOTS_DIR = "./png"
 
 ######################
 
@@ -50,9 +49,9 @@ def all_plots(model, mnist):
         plot_all_in_latent(model, mnist)
 
         print("Exploring latent...")
-        plot.exploreLatent(model, nx=20, ny=20, range_=(-4, 4), outdir=PLOTS_DIR)
+        plot.exploreLatent(model, nx=20, ny=20, range_=(-4, 4), outdir=model.png_dir)
         for n in (24, 30, 60, 100):
-            plot.exploreLatent(model, nx=n, ny=n, ppf=True, outdir=PLOTS_DIR,
+            plot.exploreLatent(model, nx=n, ny=n, ppf=True, outdir=model.png_dir,
                                name="explore_ppf{}".format(n))
 
     print("Interpolating...")
@@ -66,7 +65,7 @@ def all_plots(model, mnist):
 
     print("Plotting 10 MNIST digits...")
     for i in range(10):
-        plot.justMNIST(get_mnist(i, mnist), name=str(i), outdir=PLOTS_DIR)
+        plot.justMNIST(get_mnist(i, mnist), name=str(i), outdir=model.png_dir)
 
 def plot_all_in_latent(model, mnist):
     names = ("train", "validation", "test")
@@ -80,7 +79,7 @@ def interpolate_digits(model, mnist):
     idxs = np.random.randint(0, imgs.shape[0] - 1, 2)
     mus, _ = model.encode(np.stack([imgs[i] for i in idxs], axis=0))
     plot.interpolate(model, *mus, name="interpolate_{}->{}".format(
-        *(labels[i] for i in idxs)), outdir=PLOTS_DIR)
+        *(labels[i] for i in idxs)), outdir=model.png_dir)
 
 def plot_all_end_to_end(model, mnist):
     names = ("train", "validation", "test")
@@ -89,7 +88,7 @@ def plot_all_end_to_end(model, mnist):
         x, _ = dataset.next_batch(10)
         x_reconstructed = model.vae(x)
         plot.plotSubset(model, x, x_reconstructed, n=10, name=name,
-                        outdir=PLOTS_DIR)
+                        outdir=model.png_dir)
 
 def morph_numbers(model, mnist, ns=None, n_per_morph=10):
     if not ns:
@@ -98,7 +97,7 @@ def morph_numbers(model, mnist, ns=None, n_per_morph=10):
 
     xs = np.stack([get_mnist(n, mnist) for n in ns])
     mus, _ = model.encode(xs)
-    plot.morph(model, mus, n_per_morph=n_per_morph, outdir=PLOTS_DIR,
+    plot.morph(model, mus, n_per_morph=n_per_morph, outdir=model.png_dir,
                name="morph_{}".format("".join(str(n) for n in ns)))
 
 if __name__ == "__main__":
@@ -125,14 +124,11 @@ if __name__ == "__main__":
     # change model parameters given at start of this file when passed as command-line argument
     if args.log_folder:
         LOG_DIR = 'log_' + args.log_folder
-        # TODO this should go where embedding goes etc! no extra folder
-        PLOTS_DIR = 'png_' + args.log_folder
 
-    for DIR in (LOG_DIR, PLOTS_DIR):
-        try:
-            os.mkdir(DIR)
-        except FileExistsError:
-            pass
+    try:
+        os.mkdir(LOG_DIR)
+    except FileExistsError:
+        pass
 
     if args.beta:
         HYPERPARAMS["beta"] = args.beta[0]
