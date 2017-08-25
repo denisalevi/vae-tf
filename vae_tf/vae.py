@@ -184,7 +184,6 @@ class VAE():
                 filter_shape = filter_shape if isinstance(filter_shape, tuple) else (filter_shape, filter_shape)
                 stride = stride if isinstance(stride, tuple) else (stride, stride)
 
-
                 # convolutional layer name format: ..._conv-NxF1xF2-S1xS2-P_...
                 # where N - num_filters, F1/2 - filter_shape, S1/2 - stride, P - padding ('S' for 'SAME', 'V' for 'VALID')
                 layer_names.append('conv-'
@@ -193,7 +192,7 @@ class VAE():
                                    # stride ('S1xS2')
                                    + 'x'.join((list(map(str, stride)))) + '-'
                                    # padding ('S' or 'V')
-                                   + 'S' if padding.lower() == 'same' else 'V')
+                                   + ('S' if padding.lower() == 'same' else 'V'))
 
                 hidden_params.append({'num_outputs': num_filters,
                                       'kernel_size': filter_shape,
