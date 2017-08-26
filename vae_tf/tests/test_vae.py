@@ -6,9 +6,9 @@ import numpy as np
 import tensorflow as tf
 from nose.tools import with_setup
 
-import plot
-from utils import get_mnist
-import vae
+from vae_tf import plot
+from vae_tf.utils import get_mnist
+from vae_tf.vae import VAE
 
 # turn off tensorflow logging
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -54,7 +54,7 @@ def clear_dirs():
 def test_mnist_example():
     tf.reset_default_graph()
     mnist = load_mnist()
-    v = vae.VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
+    v = VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
     v.train(mnist, max_iter=2, max_epochs=1, cross_validate_every_n=1,
             verbose=False, save_final_state=True, plots_outdir=PLOTS_DIR,
             plot_latent_over_time=False, plot_subsets_every_n=1,
@@ -66,18 +66,18 @@ def test_mnist_example():
 def test_reloading_meta_graph():
     clear_dirs()
     tf.reset_default_graph()
-    v = vae.VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
+    v = VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
     v.save_checkpoint()
     checkpoint = v.final_checkpoint
     tf.reset_default_graph()
-    v = vae.VAE(ARCHITECTURE, HYPERPARAMS, meta_graph=checkpoint)
+    v = VAE(ARCHITECTURE, HYPERPARAMS, meta_graph=checkpoint)
     v.save_checkpoint()
     tf.reset_default_graph()
-    v = vae.VAE(ARCHITECTURE, HYPERPARAMS, meta_graph=checkpoint)
+    v = VAE(ARCHITECTURE, HYPERPARAMS, meta_graph=checkpoint)
     v.save_checkpoint()
     checkpoint = v.final_checkpoint
     tf.reset_default_graph()
-    v = vae.VAE(ARCHITECTURE, HYPERPARAMS, meta_graph=checkpoint)
+    v = VAE(ARCHITECTURE, HYPERPARAMS, meta_graph=checkpoint)
 
 @with_setup(clear_dirs)
 def test_architecture_model_naming_and_reloading():
@@ -93,7 +93,7 @@ def test_architecture_model_naming_and_reloading():
         [5, (5,5)],
         10  # if removed, remove [1:] in loop below
     ]
-    myvae = vae.VAE(arch, init=False)
+    myvae = VAE(arch, init=False)
     model_name, *_ = myvae.get_new_layer_architecture(arch)
     split = model_name.split('_')
     for name in split[1:-1]:

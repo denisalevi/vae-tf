@@ -1,8 +1,8 @@
 import numpy as np
 from numpy.testing import assert_equal, assert_array_equal
 
-from utils import random_subset, get_deconv_params
-from main import load_mnist
+from vae_tf.utils import random_subset, get_deconv_params
+from vae_tf.mnist_helpers import load_mnist
 
 
 def test_random_subset():

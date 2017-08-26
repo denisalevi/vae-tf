@@ -1,6 +1,6 @@
 from numpy.testing import assert_raises
 import numpy as np
-from plot import plot_accuracies
+from vae_tf.plot import plot_accuracies
 
 def test_plot_accuracies():
     testdata = '''arch\tbeta\tstat\tnum_runs\tclust_test_latent\tclust_test_input\tclust_train_latent
