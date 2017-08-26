@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import random
 
 import numpy as np
 import tensorflow as tf
@@ -9,6 +10,8 @@ from vae_tf import plot
 from vae_tf.vae import VAE
 from vae_tf.mnist_helpers import load_mnist, get_mnist
 
+# TODO either check if tf_cnnvis is installed or add to package requirements
+from tf_cnnvis import activation_visualization, deconv_visualization, deepdream_visualization
 
 # suppress tf log
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
@@ -31,15 +34,27 @@ HYPERPARAMS = {
 IMG_DIMS = HYPERPARAMS['img_dims']
 
 ARCHITECTURE = [IMG_DIMS[0] * IMG_DIMS[1],  # 784 pixels
-                500, 500,                   # intermediate encoding
+                (32, 5, 2, 'SAME'),
+                (64, 5, 2, 'SAME'),
+                (128, 5, 2, 'VALID'),
+                #500, 500,                   # intermediate encoding
                 10]                         # latent space dims
                 # (and symmetrically back out again)
 
 
-MAX_ITER = 40000#np.inf#2000#2**16
+MAX_ITER = 100#40000#np.inf#2000#2**16
 MAX_EPOCHS = np.inf
 
 LOG_DIR = "./log"
+
+# visualize convolutional filter activations (output of conv layers) for a given input image
+ACTIVATION_VISUALIZATION = True
+# visualize conv layer inputs reconstructed from the featuremaps (conv layer outputs) for a given input image
+# using deconv operations
+DECONV_VISUALIZATION = True
+
+# which MNIST digits to visualize (activation and/or deconv), if None one random is visualized
+VISUALIZE_DIGITS = None # [1, 2, 7]
 
 ######################
 
@@ -117,26 +132,33 @@ if __name__ == "__main__":
                              'end-to-end reconstruction)')
     parser.add_argument('--no_plots', action='store_true',
                         help="don't plot anything (default plots end-to-end reconstruction)")
+    parser.add_argument('--visualize_digits', nargs='+', default=None, type=int, choices=range(0,10),
+                        help="pass integers of digits that should be visualized (activation "
+                             "and/or deconv, depending on setting in train_vae.py)")
     args = parser.parse_args()
-
-    tf.reset_default_graph()
 
     # change model parameters given at start of this file when passed as command-line argument
     if args.log_folder:
         LOG_DIR = 'log_' + args.log_folder
+
+    if args.beta:
+        HYPERPARAMS["beta"] = args.beta[0]
+
+    if args.arch:
+        ARCHITECTURE = [IMG_DIMS[0] * IMG_DIMS[1]] + args.arch
+
+    if args.visualize_digits:
+        VISUALIZE_DIGITS = args.visualize_digits
 
     try:
         os.mkdir(LOG_DIR)
     except FileExistsError:
         pass
 
-    if args.beta:
-        HYPERPARAMS["beta"] = args.beta[0]
-    if args.arch:
-        ARCHITECTURE = [IMG_DIMS[0] * IMG_DIMS[1]] + args.arch
-
     # train or reload model
     mnist = load_mnist()
+
+    tf.reset_default_graph()
 
     if args.reload:  # restore
         if args.reload == 'most_recent':
@@ -145,6 +167,7 @@ if __name__ == "__main__":
                            if not 'reloaded' in path]
             log_folders.sort(key=os.path.getmtime)
             # load trained VAE from last checkpoint
+            assert len(log_folders) > 1, 'log folder is empty, nothing to reload'
             meta_graph = os.path.abspath(tf.train.latest_checkpoint(log_folders[-1]))
         else:
             meta_graph = args.reload
@@ -154,15 +177,54 @@ if __name__ == "__main__":
 
         # don't plot by default when reloading (--plot_all overwrites this)
         args.no_plots = True
-
     else:  # train
         model = VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
         model.train(mnist, max_iter=MAX_ITER, max_epochs=MAX_EPOCHS, cross_validate_every_n=2000,
-                verbose=True, save_final_state=True, plots_outdir=PLOTS_DIR,
+                verbose=True, save_final_state=True, plots_outdir=None,
                 plot_latent_over_time=False, plot_subsets_every_n=None, save_summaries_every_n=100)
         model.create_embedding(mnist.test.images, labels=mnist.test.labels, label_names=None,
                            sample_latent=True, latent_space=True, input_space=True,
                            image_dims=(28, 28))
+        meta_graph = model.final_checkpoint
+
+    if not all(isinstance(layer, int) for layer in ARCHITECTURE):
+        # we have convolutional layers
+        conv_layers = []
+        deconv_layers = []
+        for i in model.sesh.graph.get_operations():
+            if i.type.lower() == 'conv2d':# biasadd, elu, relu, conv2dbackpropinput
+                if not 'optimizer' in i.name:
+                    # don't visualise convolution operation of optimizer operations
+                    conv_layers.append(i.name)
+                else:
+                    print('Skipping filter visualization for {}'.format(i.name))
+            elif i.type.lower() == 'conv2dbackpropinput':
+                if not 'optimizer' in i.name and not i.name.startswith('decoding_1'):
+                    # decoding and decoding_1 are sharing weights
+                    deconv_layers.append(i.name)
+                else:
+                    print('Skipping filter visualization for {}'.format(i.name))
+        # tf_cnnvis takes the .meta file as meta_graph input
+        meta_graph_file = '.'.join([meta_graph, 'meta'])
+
+        if VISUALIZE_DIGITS is None:
+            VISUALIZE_DIGITS = [random.randint(0, 9)]
+
+        for digit in VISUALIZE_DIGITS:
+            x_in = np.expand_dims(get_mnist(digit, mnist), 0)
+
+            if ACTIVATION_VISUALIZATION:
+                activation_visualization(graph_or_path=meta_graph_file,
+                                         value_feed_dict={model.x_in: x_in},
+                                         layers=conv_layers+deconv_layers,#['c'],
+                                         path_logdir=os.path.join(model.log_dir, 'viz'),
+                                         name_suffix=str(digit))
+            if DECONV_VISUALIZATION:
+                deconv_visualization(graph_or_path=meta_graph_file,
+                                     value_feed_dict={model.x_in: x_in},
+                                     layers=conv_layers,#['c'],
+                                     path_logdir=os.path.join(model.log_dir, 'viz'),
+                                     name_suffix=str(digit))
 
     # default plot=False, no_plot=False --> plot_all_end_to_end()
     if args.plot_all:
