@@ -118,12 +118,61 @@ def morph_numbers(model, mnist, ns=None, n_per_morph=10):
     plot.morph(model, mus, n_per_morph=n_per_morph, outdir=model.png_dir,
                name="morph_{}".format("".join(str(n) for n in ns)))
 
+def fc_or_conv(string):
+    '''
+    Checks argparse argument for compatibality with VAE layer specification.
+
+    `string` must be either convertible to integer (FC layer) or consist of
+    2 to 4 space seperated values (CONV layer) of which the first 3 must be
+    convertible to integer and the 4th (if specified) must be SAME or VALID
+    (case insensitive)
+
+    Parameters
+    ----------
+    string : str
+        The string that argparse passes from the commande line
+
+    Returns
+    -------
+    int or list
+        The corresponding list of arguments (except of the input size) that can
+        be passed to the architecutre keyword of the VAE initializer.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If `string` can't be converted into a correct architecture argument.
+    '''
+    try:
+        return int(string)
+    except:
+        pass
+    try:
+        args = string.split(" ")
+        assert 2 <= len(args) <= 4
+        out = []
+        for n, arg in enumerate(args):
+            if n == 3:
+                # padding argument (str)
+                assert arg.lower() in ['same', 'valid']
+                out.append(arg)
+            else:
+                # integer arguments
+                out.append(int(arg))
+        return tuple(out)
+    except:
+        pass
+    msg = 'argmuents must be integer (FC layer) or strings of 2 to 4 space '\
+          'seperated values (CONV layer) where the first 3 values must be '\
+          'integers and the last must be `SAME` or `VALID`'
+    raise argparse.ArgumentTypeError(msg)
+
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Run vae model')
     parser.add_argument('--beta', nargs=1, type=float, default=None,
                         help='beta value of betaVAE to use (default: 1.0)')
-    parser.add_argument('--arch', nargs='*', type=int, default=None,
+    parser.add_argument('--arch', nargs='*', type=fc_or_conv, default=None,
                         help='decoder/encoder architecture to use')
     parser.add_argument('--log_folder', default=None,
                         help='where to store the tensorboard summaries')
