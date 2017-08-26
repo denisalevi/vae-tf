@@ -56,6 +56,9 @@ DECONV_VISUALIZATION = True
 # which MNIST digits to visualize (activation and/or deconv), if None one random is visualized
 VISUALIZE_DIGITS = None # [1, 2, 7]
 
+# where to save cnnvis figures (None does not save on disk)
+CNNVIS_OUTDIR = None
+
 ######################
 
 def all_plots(model, mnist):
@@ -218,12 +221,14 @@ if __name__ == "__main__":
                                          value_feed_dict={model.x_in: x_in},
                                          layers=conv_layers+deconv_layers,#['c'],
                                          path_logdir=os.path.join(model.log_dir, 'viz'),
+                                         path_outdir=CNNVIS_OUTDIR,
                                          name_suffix=str(digit))
             if DECONV_VISUALIZATION:
                 deconv_visualization(graph_or_path=meta_graph_file,
                                      value_feed_dict={model.x_in: x_in},
                                      layers=conv_layers,#['c'],
                                      path_logdir=os.path.join(model.log_dir, 'viz'),
+                                     path_outdir=CNNVIS_OUTDIR,
                                      name_suffix=str(digit))
 
     # default plot=False, no_plot=False --> plot_all_end_to_end()
