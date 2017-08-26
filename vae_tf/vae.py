@@ -158,7 +158,7 @@ class VAE():
                 if len(layer) == 4:
                     num_filters, filter_shape, stride, padding = layer
                 elif len(layer) == 3:
-                    num_filters, filters_shape, tmp = layer
+                    num_filters, filter_shape, tmp = layer
                     err_msg = 'architecture[{}][2] must be str, int or tuple(int), is {}'.format(n+1, type(tmp))
                     if isinstance(tmp, str):
                         padding = tmp
