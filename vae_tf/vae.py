@@ -471,6 +471,8 @@ class VAE():
                   "and latent_space=False. No embedding created.")
             return
 
+        dataset = dataset.reshape([-1, 28, 28, 1])
+
         # encode dataset
         mus, sigmas = self.encode(dataset)
         if sample_latent:
@@ -486,7 +488,7 @@ class VAE():
                                          trainable=False)
             self.embedding_vars.append(emb_var_latent)
         if input_space:
-            emb_var_input = tf.Variable(dataset, name='embedding_x_input', trainable=False)
+            emb_var_input = tf.Variable(dataset.reshape([-1, 28*28]), name='embedding_x_input', trainable=False)
             self.embedding_vars.append(emb_var_input)
 
         # since we create the embedding after training, we need to initialize the vars
