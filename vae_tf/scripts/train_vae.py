@@ -39,7 +39,7 @@ IMG_DIMS = HYPERPARAMS['img_dims']
 ARCHITECTURE = [IMG_DIMS[0] * IMG_DIMS[1],  # 784 pixels
                 (32, 5, 2, 'SAME'),
                 (64, 5, 2, 'SAME'),
-                (128, 5, 2, 'VALID'),
+                (128, 5, 2, 'SAME'),
                 #500, 500,                   # intermediate encoding
                 10]                         # latent space dims
                 # (and symmetrically back out again)
@@ -142,6 +142,8 @@ if __name__ == "__main__":
     parser.add_argument('--visualize_digits', nargs='+', default=None, type=int, choices=range(0,10),
                         help="pass integers of digits that should be visualized (activation "
                              "and/or deconv, depending on setting in train_vae.py)")
+    parser.add_argument('--max_iter', default=None, type=int,
+                        help='Number of batches after which to stop training')
     args = parser.parse_args()
 
     # change model parameters given at start of this file when passed as command-line argument
@@ -156,6 +158,9 @@ if __name__ == "__main__":
 
     if args.visualize_digits:
         VISUALIZE_DIGITS = args.visualize_digits
+
+    if args.max_iter:
+        MAX_ITER = args.max_iter
 
     try:
         os.mkdir(LOG_DIR)
