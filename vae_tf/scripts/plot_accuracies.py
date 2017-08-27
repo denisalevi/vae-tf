@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 from vae_tf.plot import plot_accuracies
 import argparse
 
@@ -8,6 +10,21 @@ parser.add_argument('--sort_by', nargs=1, default=[None], type=str,
                     help='What to sort the accuracies by (beta, arch, some accuracy)')
 parser.add_argument('--index', nargs=1, default=[None], type=str,
                     help='Plot accuracies for a ceratin index in data matrix (one arch or beta)')
+parser.add_argument('--columns', nargs='+', default=None, type=str,
+                    help='Which columns from the accuracy_file to plot (default is all)')
+parser.add_argument('--kwargs', nargs='+', default=None, type=lambda kv: kv.split("="),
+                    help='keyword args past to pandas.DataFrame.plot() function (form --kwargs key=value key2=value2)')
 args = parser.parse_args()
 
-plot_accuracies(args.accuracy_file[0], sort_by=args.sort_by[0], index=args.index[0])
+plot_kwargs = {}
+if args.kwargs:
+    for key, value in args.kwargs:
+        # if value is numeric, turn into float
+        try:
+            value = float(value)
+        except ValueError:
+            pass
+        plot_kwargs[key] = value
+
+plot_accuracies(args.accuracy_file[0], sort_by=args.sort_by[0], index=args.index[0],
+                plot_columns=args.columns, **plot_kwargs)
