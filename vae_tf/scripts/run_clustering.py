@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import glob
 import os
 import sys
@@ -8,14 +10,14 @@ import tensorflow as tf
 
 from vae_tf.vae import VAE
 from vae_tf.clustering import hierarchical_clustering
-from vae_tf.utils import random_subset
+from vae_tf.utils import random_subset, fc_or_conv_arg
 from vae_tf.mnist_helpers import load_mnist
 
 import argparse
 parser = argparse.ArgumentParser(description='Run classification')
 parser.add_argument('--beta', nargs=1, type=float, default=[None],
                     help='If given, this values will be written to the accuracies.txt file')
-parser.add_argument('--arch', nargs='*', type=int, default=[None],
+parser.add_argument('--arch', nargs='*', type=fc_or_conv_arg, default=[None],
                     help='If given, this list will be written to the accuracies.txt file')
 parser.add_argument('--save', type=str, default='./accuracies.txt',
                     help='Where to save accuracies (appending)')

@@ -1,3 +1,5 @@
+#!/usr/bin/env python
+
 import os
 import sys
 import glob
@@ -9,6 +11,7 @@ import tensorflow as tf
 from vae_tf import plot
 from vae_tf.vae import VAE
 from vae_tf.mnist_helpers import load_mnist, get_mnist
+from vae_tf.utils import fc_or_conv_arg
 
 # TODO either check if tf_cnnvis is installed or add to package requirements
 from tf_cnnvis import activation_visualization, deconv_visualization, deepdream_visualization
@@ -42,7 +45,7 @@ ARCHITECTURE = [IMG_DIMS[0] * IMG_DIMS[1],  # 784 pixels
                 # (and symmetrically back out again)
 
 
-MAX_ITER = 100#40000#np.inf#2000#2**16
+MAX_ITER = 40000#np.inf#2000#2**16
 MAX_EPOCHS = np.inf
 
 LOG_DIR = "./log"
@@ -51,10 +54,10 @@ LOG_DIR = "./log"
 ACTIVATION_VISUALIZATION = True
 # visualize conv layer inputs reconstructed from the featuremaps (conv layer outputs) for a given input image
 # using deconv operations
-DECONV_VISUALIZATION = True
+DECONV_VISUALIZATION = False
 
 # which MNIST digits to visualize (activation and/or deconv), if None one random is visualized
-VISUALIZE_DIGITS = None # [1, 2, 7]
+VISUALIZE_DIGITS = [4] #None # [1, 2, 7]
 
 # where to save cnnvis figures (None does not save on disk)
 CNNVIS_OUTDIR = None
@@ -118,61 +121,13 @@ def morph_numbers(model, mnist, ns=None, n_per_morph=10):
     plot.morph(model, mus, n_per_morph=n_per_morph, outdir=model.png_dir,
                name="morph_{}".format("".join(str(n) for n in ns)))
 
-def fc_or_conv(string):
-    '''
-    Checks argparse argument for compatibality with VAE layer specification.
-
-    `string` must be either convertible to integer (FC layer) or consist of
-    2 to 4 space seperated values (CONV layer) of which the first 3 must be
-    convertible to integer and the 4th (if specified) must be SAME or VALID
-    (case insensitive)
-
-    Parameters
-    ----------
-    string : str
-        The string that argparse passes from the commande line
-
-    Returns
-    -------
-    int or list
-        The corresponding list of arguments (except of the input size) that can
-        be passed to the architecutre keyword of the VAE initializer.
-
-    Raises
-    ------
-    argparse.ArgumentTypeError
-        If `string` can't be converted into a correct architecture argument.
-    '''
-    try:
-        return int(string)
-    except:
-        pass
-    try:
-        args = string.split(" ")
-        assert 2 <= len(args) <= 4
-        out = []
-        for n, arg in enumerate(args):
-            if n == 3:
-                # padding argument (str)
-                assert arg.lower() in ['same', 'valid']
-                out.append(arg)
-            else:
-                # integer arguments
-                out.append(int(arg))
-        return tuple(out)
-    except:
-        pass
-    msg = 'argmuents must be integer (FC layer) or strings of 2 to 4 space '\
-          'seperated values (CONV layer) where the first 3 values must be '\
-          'integers and the last must be `SAME` or `VALID`'
-    raise argparse.ArgumentTypeError(msg)
 
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description='Run vae model')
     parser.add_argument('--beta', nargs=1, type=float, default=None,
                         help='beta value of betaVAE to use (default: 1.0)')
-    parser.add_argument('--arch', nargs='*', type=fc_or_conv, default=None,
+    parser.add_argument('--arch', nargs='*', type=fc_or_conv_arg, default=None,
                         help='decoder/encoder architecture to use')
     parser.add_argument('--log_folder', default=None,
                         help='where to store the tensorboard summaries')

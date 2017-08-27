@@ -165,3 +165,52 @@ def get_deconv_params(out_size, in_size, filter_size, stride):
         # out_shape = in_shape * stride
         stride = out_size // in_size  # if this is no int, use VALID padding
     return filter_size, stride, padding
+
+def fc_or_conv_arg(string):
+    '''
+    Checks argparse argument for compatibality with VAE layer specification.
+
+    `string` must be either convertible to integer (FC layer) or consist of
+    2 to 4 space seperated values (CONV layer) of which the first 3 must be
+    convertible to integer and the 4th (if specified) must be SAME or VALID
+    (case insensitive)
+
+    Parameters
+    ----------
+    string : str
+        The string that argparse passes from the commande line
+
+    Returns
+    -------
+    int or list
+        The corresponding list of arguments (except of the input size) that can
+        be passed to the architecutre keyword of the VAE initializer.
+
+    Raises
+    ------
+    argparse.ArgumentTypeError
+        If `string` can't be converted into a correct architecture argument.
+    '''
+    try:
+        return int(string)
+    except:
+        pass
+    try:
+        args = string.split(" ")
+        assert 2 <= len(args) <= 4
+        out = []
+        for n, arg in enumerate(args):
+            if n == 3:
+                # padding argument (str)
+                assert arg.lower() in ['same', 'valid']
+                out.append(arg)
+            else:
+                # integer arguments
+                out.append(int(arg))
+        return tuple(out)
+    except:
+        pass
+    msg = 'argmuents must be integer (FC layer) or strings of 2 to 4 space '\
+          'seperated values (CONV layer) where the first 3 values must be '\
+          'integers and the last must be `SAME` or `VALID`'
+    raise argparse.ArgumentTypeError(msg)
