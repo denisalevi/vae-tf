@@ -184,8 +184,8 @@ for n in range(args.repeat):
     subset_test_images, subset_labels = random_subset(mnist.test.images, subset_size, labels=labels,
                                                       same_num_labels=True)
     vae.create_embedding(subset_test_images, labels=subset_labels, label_names=label_names,
-                         sample_latent=True, latent_space=True, input_space=True,
-                         image_dims=(28, 28))
+                         sample_latent=False, latent_space=True, input_space=True,
+                         create_sprite=True)
 
     with open(savefile_single_runs, 'a') as log_file:
         txt = '{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(args.arch), str(args.beta[0]),

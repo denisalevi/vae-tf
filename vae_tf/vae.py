@@ -455,12 +455,11 @@ class VAE():
             return mu + epsilon * tf.exp(log_sigma)  # N(mu, I * sigma**2)
 
     def create_embedding(self, dataset, labels=None, label_names=None,
-                         sample_latent=True, latent_space=True, input_space=True,
-                         image_dims=None):
+                         sample_latent=False, latent_space=True, input_space=True,
+                         create_sprite=True):
         """dataset.shape = (num_items, item_dimension)
         labels.shape = (num_items, num_labels)
         label_names = list
-        image_dims = tuple (if None, no sprite is created)
         """
 
         if labels is not None:
@@ -527,19 +526,19 @@ class VAE():
                 if input_space:
                     embedding_input.metadata_path = metadata_file
 
-            if image_dims is not None:
+            if create_sprite:
                 # create sprite image
                 # reshape images into (N, width, height)
-                embedding_images = dataset.reshape((-1, *image_dims))
+                embedding_images = dataset.reshape((-1, *self.img_dims))
                 sprite_image = images_to_sprite(embedding_images, invert=True)
                 sprite_file = os.path.join(log_dir, 'sprite_img.png')
                 scipy.misc.imsave(sprite_file, sprite_image)
                 if latent_space:
                     embedding_latent.sprite.image_path = sprite_file
-                    embedding_latent.sprite.single_image_dim.extend(list(image_dims))
+                    embedding_latent.sprite.single_image_dim.extend(list(self.img_dims))
                 if input_space:
                     embedding_input.sprite.image_path = sprite_file
-                    embedding_input.sprite.single_image_dim.extend(list(image_dims))
+                    embedding_input.sprite.single_image_dim.extend(list(self.img_dims))
 
             # The next line writes a projector_config.pbtxt in the projector_dir. TensorBoard will
             # read this file during startup.

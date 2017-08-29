@@ -144,6 +144,8 @@ if __name__ == "__main__":
                              "and/or deconv, depending on setting in train_vae.py)")
     parser.add_argument('--max_iter', default=None, type=int,
                         help='Number of batches after which to stop training')
+    parser.add_argument('--create_embedding', action='store_true',
+                        help='Create an embedding of test data for TensorBoard')
     args = parser.parse_args()
 
     # change model parameters given at start of this file when passed as command-line argument
@@ -194,9 +196,14 @@ if __name__ == "__main__":
         model.train(mnist, max_iter=MAX_ITER, max_epochs=MAX_EPOCHS, cross_validate_every_n=2000,
                 verbose=True, save_final_state=True, plots_outdir=None,
                 plot_latent_over_time=False, plot_subsets_every_n=None, save_summaries_every_n=100)
-        model.create_embedding(mnist.test.images, labels=mnist.test.labels, label_names=None,
-                           sample_latent=True, latent_space=True, input_space=True,
-                           image_dims=(28, 28))
+        if args.create_embedding:
+            subset_size = 1000
+            subset_images, subset_labels = random_subset(mnist.test.images, subset_size,
+                                                         labels=mnist.test.labels,
+                                                         same_num_labels=True)
+            model.create_embedding(subset_images, labels=subset_labels, label_names=None,
+                                   sample_latent=False, latent_space=True, input_space=True,
+                                   create_sprite=True)
         meta_graph = model.final_checkpoint
 
     if not all(isinstance(layer, int) for layer in ARCHITECTURE):
