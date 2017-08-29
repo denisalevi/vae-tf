@@ -96,12 +96,13 @@ def test_architecture_model_naming_and_reloading():
     myvae = VAE(arch, init=False)
     model_name, *_ = myvae.get_new_layer_architecture(arch)
     split = model_name.split('_')
-    for name in split[1:-1]:
+    for name in split[2:-1]:
         assert name == 'conv-5x5x5-1x1-S', 'unexpected name {}'.format(name)
-    assert split[0] == '784', split[0]
+    assert split[0] == 'beta-1.0', split[1]  # default value
+    assert split[1] == '784', split[0]
     assert split[-1] == '10', split[-1]
 
-    arch_reload = myvae.get_architecture_from_model_name(model_name)
+    arch_reload, beta_reload = myvae.get_architecture_from_model_name(model_name)
     for layer in arch_reload[1:-1]:
         assert layer[0] == 5, layer[0]
         assert layer[1] == (5, 5), layer[1]
@@ -109,12 +110,20 @@ def test_architecture_model_naming_and_reloading():
         assert layer[3] == 'SAME', layer[3]
     assert arch_reload[0] == 784, arch_reload[0]
     assert arch_reload[-1] == 10, arch_reload[-1]
+    assert beta_reload == 1.0
 
+    myvae2 = VAE(arch, init=False, d_hyperparams={'beta': 0.5})
     arch2 = [784, 500, 10]
-    model_name2, *_ = myvae.get_new_layer_architecture(arch2)
-    assert model_name2 == '784_fc-500_10', model_name2
-    arch_reload2 = myvae.get_architecture_from_model_name(model_name2)
+    model_name2, *_ = myvae2.get_new_layer_architecture(arch2)
+    assert model_name2 == 'beta-0.5_784_fc-500_10', model_name2
+    arch_reload2, beta_reload2 = myvae.get_architecture_from_model_name(model_name2)
     assert arch_reload2[1] == 500
+    assert beta_reload2 == 0.5
+
+    model_name3 = '784_fc-500_10'  # old naming convention
+    arch_reload3, beta_reload3 = myvae.get_architecture_from_model_name(model_name3)
+    assert arch_reload3[1] == 500
+    assert beta_reload3 is None
 
 if __name__ == '__main__':
-    test_architecture_model_naming()
+    test_architecture_model_naming_and_reloading()

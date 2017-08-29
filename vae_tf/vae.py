@@ -112,7 +112,7 @@ class VAE():
                 unique_idx += 1
 
             self.datetime = model_datetime
-            self.architecture = self.get_architecture_from_model_name(model_name)
+            self.architecture, self.beta = self.get_architecture_from_model_name(model_name)
 
             # rebuild graph
             meta_graph = os.path.abspath(meta_graph)
@@ -209,16 +209,21 @@ class VAE():
 
         layer_names.append(str(architecture[-1]))
         model_name = '_'.join(layer_names)
+        model_name = 'beta-{}_{}'.format(self.beta, model_name)
         return model_name, hidden_layers, hidden_params
 
     @staticmethod
     def get_architecture_from_model_name(model_name):
         """Extract architecture (as would be passed to self.__init__()) from model name string"""
         architecture = []
+        beta = None
         layer_names = model_name.split("_")
         for name in layer_names:
             layer_type, *layer_params = name.split('-')
-            if layer_type == 'fc':
+            if layer_type == 'beta':
+                assert len(layer_params) == 1
+                beta = float(layer_params[0])
+            elif layer_type == 'fc':
                 assert len(layer_params) == 1
                 num_outputs = int(layer_params[0])
                 architecture.append(num_outputs)
@@ -238,7 +243,7 @@ class VAE():
             else:
                 raise ValueError("Couldn't split model name {} into architecture."
                                  "".format(model_name))
-        return architecture
+        return architecture, beta
 
 
     @property

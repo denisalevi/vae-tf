@@ -96,7 +96,26 @@ else:
 # specify log folder manually
 #META_GRAPH = './log_CNN/170713_1213_vae_784_conv-20x5x5-2x2-S_conv-50x5x5-2x2-S_conv-70x5x5-2x2-S_conv-100x5x5-2x2-S_10'
 
+# get arch and beta from META_GRAPH string
+# add trialing slash if not there (turns 'path/to/folder' and 'path/to/folder/' into 'path/to/folder/')
+model_name = os.path.join(META_GRAPH, '')
+# remove trailing slash (returns 'path/to/folder')
+model_name = os.path.dirname(model_name)
+# get the folder name (returns 'folder')
+model_name = os.path.basename(model_name)
+# get model architecture
+prefix, model_name = model_name.split("_vae_")
+arch_from_name, beta_from_name = VAE.get_architecture_from_model_name(model_name)
 
+if args.beta[0] is None:
+    beta = beta_from_name
+else:
+    beta = args.beta[0]
+
+if args.arch is None:
+    arch = str(arch_from_name[1:])
+else:
+    arch = args.arch
 
 # load mnist datasets
 mnist = load_mnist()
@@ -217,7 +236,7 @@ for n in range(args.repeat):
                          create_sprite=True)
 
     with open(savefile_single_runs, 'a') as log_file:
-        txt = '{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(args.arch), str(args.beta[0]),
+        txt = '{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(args.beta[0]),
                                                         accuracy_clust_test_latent, accuracy_clust_train_latent,
                                                         accuracy_clust_test_input)
         print('Saving single run clustering accuracies in {}'.format(savefile_single_runs))
@@ -231,12 +250,12 @@ accuracy_clust_test_input_mean = np.mean(accuracy_clust_test_input_list)
 accuracy_clust_test_input_std = np.std(accuracy_clust_test_input_list)
 
 with open(savefile, 'a') as log_file:
-    mean_txt = '{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(args.arch), str(args.beta[0]), 'mean', args.repeat,
+    mean_txt = '{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(args.beta[0]), 'mean', args.repeat,
                                                                  accuracy_mean,
                                                                  accuracy_clust_train_latent_mean,
                                                                  accuracy_clust_test_input_mean)
     log_file.write(mean_txt)
-    std_txt = '{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(args.arch), str(args.beta[0]), 'std', args.repeat,
+    std_txt = '{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(args.beta[0]), 'std', args.repeat,
                                                                  accuracy_std,
                                                                  accuracy_clust_train_latent_std,
                                                                  accuracy_clust_test_input_std)
