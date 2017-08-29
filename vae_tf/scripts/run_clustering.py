@@ -31,10 +31,15 @@ parser.add_argument('--repeat', type=int, default=1,
                     help='How often to repeat the classification with same datasets (but new sampling in latent space).')
 parser.add_argument('--log_folder', type=str, default=None,
                     help='Where the vae model log folders are stored.')
+parser.add_argument('--use_gpu', action='store_true',
+                    help='Only use CPU for comutations.')
 args = parser.parse_args()
 
 # suppress tf log
 os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+if not args.use_gpu:
+    os.environ["CUDA_VISIBLE_DEVICES="] = ""
 
 if args.log_folder:
     LOG_FOLDER = 'log_' + args.log_folder
