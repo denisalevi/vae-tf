@@ -75,7 +75,7 @@ def assign_cluster_labels(cluster_indices, true_labels):
         # get true labels for this cluster
         true_cluster_labels = true_labels[mask]
         # get the ocurrences of true labels in the cluster
-        counts = np.bincount(true_cluster_labels)
+        counts = np.bincount(true_cluster_labels, minlength=num_clusters)
         # compute their fraction to the total number of labels
         fractions = counts / counts.sum()
         label_fractions.append(fractions)
@@ -167,7 +167,7 @@ def assign_cluster_labels(cluster_indices, true_labels):
                     ))
                     # and break out of inner loop
                     break
-    assert not any(cluster_labels == -1), 'Not all cluster_labels were set! cluster_labels = {}'.format(cluster_labels)
+    assert not any(cluster_labels == -1), 'Not all cluster_labels were set! cluster_labels = {}'.format(np.unique(cluster_labels))
     return cluster_labels
 
 def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean',
@@ -261,7 +261,7 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
         num_clusters = int(np.max(cluster_indices))
 
     #print('cluster indices', np.unique(cluster_indices))
-    print('cluster idx count', np.bincount(cluster_indices))
+    print('cluster idx count', np.bincount(cluster_indices, minlength=num_clusters+1))
     
     if true_labels is not None:
         cluster_labels = assign_cluster_labels(cluster_indices, true_labels)
