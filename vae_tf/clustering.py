@@ -26,9 +26,9 @@ class ClusteringResults(object):
         return assignments
 
 
-def assign_cluster_labels(cluster_indices, true_labels):
+def assign_cluster_labels(cluster_indices, true_labels, use_label_count=False):
     '''
-    Assign labels to clusters in best accordance with the true labels.
+    Assign labels to clusters, trying to maximize number of correct labels.
 
     To each cluster assign the label from `true_labels` that is occuring most
     often. Assign labels to clusters in descending order of the fraction of
@@ -39,23 +39,25 @@ def assign_cluster_labels(cluster_indices, true_labels):
     and then try to assign the label with that next most often occuring label.
     If that label is also already assigned to another cluster, repeat the
     procedure. This way the total number of correct labels in the clustered
-    data is maximized (assuming balanced data sets). For unbalanced datasets a
-    slightly different labeling might increase the overall number of correct
-    labels (TODO: e.g. weight label fraction by the fraction of the occurence
-    of that true label in the entire dataset)
+    data is maximized if the cluster sizes are equal. For differently sized
+    clusters different labeling might increase the overall number of correct
+    labels.
 
     Parameters
     ----------
     cluster_indices : ndarray
         1D array of `int` of length equal to the number of data points, giving
         the cluster assingment of data to cluster numbers. Cluster numbers have
-        to be going from 1 to the number of cluster (range(1, num_clusters +
-        1)).
+        to in the range from 1 to the number of clusters (range(1, num_clusters
+        + 1)).
     true_labels : ndarray
         1D array of length equal to the number of data points, giving the true
         labels of the data. True labels have to be in the range from 0 to the
         number of cluster -1 (range(num_clusters)).
-
+    use_label_count : bool, optional
+        If True, sort cluster assignment by total number of occurences of most
+        occuring true label in cluster (fraction * cluster_size). Default is
+        False, sorting cluster assignment by fraction of occurences.
 
     Returns
     -------
@@ -77,7 +79,11 @@ def assign_cluster_labels(cluster_indices, true_labels):
         # get the ocurrences of true labels in the cluster
         counts = np.bincount(true_cluster_labels, minlength=num_clusters)
         # compute their fraction to the total number of labels
-        fractions = counts / counts.sum()
+        if use_label_count:
+            # use total label counts instead of fractions
+            fractions = counts
+        else:
+            fractions = counts / counts.sum()
         label_fractions.append(fractions)
         highest_label_fractions.append(fractions.max())
 
@@ -173,7 +179,8 @@ def assign_cluster_labels(cluster_indices, true_labels):
 def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean',
                             check_cophonetic=False, plot_dir=None,
                             truncate_dendrogram=None, num_clusters=None,
-                            max_dist=None, true_labels=None):
+                            max_dist=None, true_labels=None,
+                            assign_clusters_with_label_count=False):
     """hierarchical_clustering
 
     :param X: dataset in clustering space, shape (num_samples, num_dimensions)
@@ -185,6 +192,7 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
     :param num_clusters: determines where to cut the dendrogram for cluster assignment
     :param max_dist: determines where to cut dendrogram for cluster assignment
     :param true_labels: if given, cluster labels are chosen from highest occuring true_labels in cluster
+    :param assign_clusters_with_label_count: Use count of label occurences instead of fraction for assignments.
     """
     if num_clusters is not None and max_dist is not None:
         raise ValueError("You can't specifyg num_clusters and max_dist.")
@@ -264,7 +272,8 @@ def hierarchical_clustering(X, linkage_method='ward', distance_metric='euclidean
     print('cluster idx count', np.bincount(cluster_indices, minlength=num_clusters+1))
     
     if true_labels is not None:
-        cluster_labels = assign_cluster_labels(cluster_indices, true_labels)
+        cluster_labels = assign_cluster_labels(cluster_indices, true_labels,
+                                               use_label_count=assign_clusters_with_label_count)
     else:  # no true_labels given
         cluster_labels = cluster_indices - 1  # let indexing start at 0
 	   
