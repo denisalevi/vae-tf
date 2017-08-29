@@ -31,6 +31,10 @@ parser.add_argument('--repeat', type=int, default=1,
                     help='How often to repeat the classification with same datasets (but new sampling in latent space).')
 parser.add_argument('--log_folder', type=str, default=None,
                     help='Where the vae model log folders are stored.')
+parser.add_argument('--meta_graph', type=str, default=None,
+                    help='Specific model folder name')
+parser.add_argument('--assign_with_count', action='store_true',
+                    help='Use count of label occurences instead of fraction for assignment order.')
 parser.add_argument('--use_gpu', action='store_true',
                     help='Only use CPU for comutations.')
 args = parser.parse_args()
@@ -77,13 +81,19 @@ if not os.path.isfile(savefile_single_runs):
         column_labels = '\t'.join(['arch', 'beta', 'clust_test_latent', 'clust_test_input', 'clust_train_latent'])#classification_latent_with_train_centroids'])
         log_file.write(header_txt + '\n' + column_labels + '\n')
 
-# load most recently trained vae model (assuming it hasen't been first reloaded)
-log_folders = [path for path in glob.glob('./' + LOG_FOLDER + '/*') if not 'reloaded' in path]
-log_folders.sort(key=os.path.getmtime)
-META_GRAPH = log_folders[-1]
+if args.meta_graph is not None:
+    META_GRAPH = args.meta_graph
+else:
+    # load most recently trained vae model (assuming it hasen't been first reloaded)
+    log_folders = [path for path in glob.glob('./' + LOG_FOLDER + '/*') if not 'reloaded' in path]
+    print('LOG FOLDERS\n', log_folders)
+    log_folders.sort(key=os.path.getmtime)
+    META_GRAPH = log_folders[-1]
 
 # specify log folder manually
-#META_GRAPH = './log_CNN/170713_1213_vae_784_conv-20x5x5-2x2-S_conv-50x5x5-2x2-S_conv-70x5x5-2x2-S_conv-100x5x5-2x2-S_10/'
+#META_GRAPH = './log_CNN/170713_1213_vae_784_conv-20x5x5-2x2-S_conv-50x5x5-2x2-S_conv-70x5x5-2x2-S_conv-100x5x5-2x2-S_10'
+
+
 
 # load mnist datasets
 mnist = load_mnist()
@@ -119,7 +129,8 @@ for n in range(args.repeat):
         clust_test_latent = hierarchical_clustering(
             test_latent, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
             plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
-            num_clusters=10, max_dist=None, true_labels=mnist.test.labels
+            num_clusters=10, max_dist=None, true_labels=mnist.test.labels,
+            assign_clusters_with_label_count=args.assign_with_count
         )
         label_list.append(clust_test_latent.labels)
         label_names.append('hierarchical_clustering')
@@ -140,7 +151,8 @@ for n in range(args.repeat):
         clust_test_input = hierarchical_clustering(
             test_images_flat, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
             plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
-            num_clusters=10, max_dist=None, true_labels=mnist.test.labels
+            num_clusters=10, max_dist=None, true_labels=mnist.test.labels,
+            assign_clusters_with_label_count=args.assign_with_count
         )
         label_list.append(clust_test_input.labels)
         label_names.append('hierarchical_clustering_x_input')
@@ -166,7 +178,8 @@ for n in range(args.repeat):
         clust_train_latent = hierarchical_clustering(
             train_latent, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
             plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
-            num_clusters=10, max_dist=None, true_labels=mnist.train.labels
+            num_clusters=10, max_dist=None, true_labels=mnist.train.labels,
+            assign_clusters_with_label_count=args.assign_with_count
         )
         # classify test data by closest cluster centroid
         classify_test_labels = clust_train_latent.assign_to_nearest_cluster(test_latent)
