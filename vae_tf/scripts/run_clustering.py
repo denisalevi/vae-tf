@@ -33,6 +33,8 @@ parser.add_argument('--log_folder', type=str, default=None,
                     help='Where the vae model log folders are stored.')
 parser.add_argument('--meta_graph', type=str, default=None,
                     help='Specific model folder name')
+parser.add_argument('--sample_latent', action='store_true',
+                    help='Sample data in latent space before clustering (otherwise just use mean for clustering)')
 parser.add_argument('--assign_with_count', action='store_true',
                     help='Use count of label occurences instead of fraction for assignment order.')
 parser.add_argument('--use_gpu', action='store_true',
@@ -50,7 +52,8 @@ if args.log_folder:
 else:
     LOG_FOLDER = 'log'
 
-model_label = '\t'.join([str(args.arch), str(args.beta[0])])
+if not args.sample_latent and args.repeat > 1:
+    print("WARNING: repeating clustering without sampling in latent space. Waste of time, the results should be deterministic!")
 
 savefile = args.save
 filename, ext = os.path.splitext(savefile)
@@ -122,8 +125,12 @@ for n in range(args.repeat):
     ## CLASSIFY BY CLUSTERING ENCODED TEST DATA (network trained on train data)
     if args.clust_test_latent:
         # encode mnist.test into latent space for clustering
-        # TODO any consequences of sampling here?
-        test_latent = vae.sesh.run(vae.sampleGaussian(*vae.encode(mnist.test.images), seed=seed))
+        mu, log_sigma = vae.encode(mnist.test.images)
+        if args.sample_latent:
+            test_latent = vae.sesh.run(vae.sampleGaussian(mu, log_sigma, seed=seed))
+        else:
+            # cluster using only the mean
+            test_latent = mu
 
         # do clustering
         clust_test_latent = hierarchical_clustering(
@@ -171,8 +178,12 @@ for n in range(args.repeat):
     if args.clust_train_latent:
         ## (network trained on train data)
         # encode mnist.train into latent space for clustering
-        # TODO any consequences of sampling here?
-        train_latent = vae.sesh.run(vae.sampleGaussian(*vae.encode(mnist.train.images), seed=seed))
+        mu, log_sigma = vae.encode(mnist.train.images)
+        if args.sample_latent:
+            train_latent = vae.sesh.run(vae.sampleGaussian(mu, log_sigma, seed=seed))
+        else:
+            # cluster using only the mean
+            train_latent = mu
 
         # do clustering
         clust_train_latent = hierarchical_clustering(
