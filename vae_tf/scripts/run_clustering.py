@@ -9,7 +9,7 @@ import numpy as np
 import tensorflow as tf
 
 from vae_tf.vae import VAE
-from vae_tf.clustering import hierarchical_clustering
+from vae_tf.clustering import hierarchical_clustering, kmeans_clustering
 from vae_tf.utils import random_subset, fc_or_conv_arg
 from vae_tf.mnist_helpers import load_mnist
 
@@ -17,16 +17,15 @@ import argparse
 parser = argparse.ArgumentParser(description='Run classification')
 parser.add_argument('--beta', nargs=1, type=float, default=[None],
                     help='If given, this values will be written to the accuracies.txt file')
-parser.add_argument('--arch', nargs='*', type=fc_or_conv_arg, default=[None],
+parser.add_argument('--arch', nargs='*', type=str, default=None,
                     help='If given, this list will be written to the accuracies.txt file')
 parser.add_argument('--save', type=str, default='./accuracies.txt',
                     help='Where to save accuracies (appending)')
-parser.add_argument('--clust_test_latent', action='store_true',
-                    help='Classify by clustering encoded test data (network trained on train data)')
-parser.add_argument('--clust_test_input', action='store_true',
-                    help='Classify by blustering test data in input space')
-parser.add_argument('--clust_train_latent', action='store_true',
-                    help='Classify encoded test data by using centroids from clustering encoded train data')
+parser.add_argument('--cluster', nargs='+', default=['test_latent'],
+                    choices=['test_latent', 'test_input', 'train_latent'],
+                    help='Choose what to cluster.')
+parser.add_argument('--method', type=str, default='hierarchical', choices=['kmeans', 'hierarchical'],
+                    help='Cluster method to use')
 parser.add_argument('--repeat', type=int, default=1,
                     help='How often to repeat the classification with same datasets (but new sampling in latent space).')
 parser.add_argument('--log_folder', type=str, default=None,
@@ -35,10 +34,18 @@ parser.add_argument('--meta_graph', type=str, default=None,
                     help='Specific model folder name')
 parser.add_argument('--sample_latent', action='store_true',
                     help='Sample data in latent space before clustering (otherwise just use mean for clustering)')
+parser.add_argument('--comment', default='-', type=str,
+                    help='Comment to put in comment index column in accuracy file. To label same parameter runs differently.')
 parser.add_argument('--assign_with_count', action='store_true',
                     help='Use count of label occurences instead of fraction for assignment order.')
 parser.add_argument('--use_gpu', action='store_true',
                     help='Only use CPU for comutations.')
+parser.add_argument('--num_clusters', type=int, default=10,
+                    help='Changes where the hyrarchical clustering is cut to create the correct number of clusters.')
+parser.add_argument('--assign_by_prob', action='store_true',
+                    help='Assign cluster labels from data point that has the highest probability to belong to that cluster.')
+parser.add_argument('--allow_same_labels', action='store_false',  # will be passed as distinct_labels argument
+                    help='Allow multiple clusters to get the same cluster label')
 args = parser.parse_args()
 
 # suppress tf log
@@ -62,26 +69,31 @@ savefile_single_runs = filename + '_detailed' + ext
 if not os.path.isfile(savefile):
     header_txt = '''# arch: architecture as used as parameter in VAE class in vae.py
 # beta: beta value of beta-VAE
+# comment: extra index column for comment
 # stat: statistic (mean or std)
 # num_runs: how many runs were used to calc mean and std
 # cluster_test_latent: classification accuracy by clustering encoded test data (network trained on train data)
 # cluster_test_input: classification accuracy by clustering test data in input space (without training or encoding)
 # cluster_train_latent: classification accuracy by classifying encoded test data using centroids from clustering encoded train data'''
     with open(savefile, 'w') as log_file:
-        column_labels = '\t'.join(['arch', 'beta', 'stat', 'num_runs',
+        column_labels = '\t'.join(['arch', 'beta', 'comment', 'stat', 'num_runs',
                                    'clust_test_latent',
-                                   'clust_test_input',
-                                   'clust_train_latent'])
+                                   'clust_train_latent',
+                                   'clust_test_input'])
         log_file.write(header_txt + '\n' + column_labels + '\n')
 
 if not os.path.isfile(savefile_single_runs):
     header_txt = '''# arch: architecture as used as parameter in VAE class in vae.py
 # beta: beta value of beta-VAE
+# comment: extra index column for comment
 # cluster_test_latent: classification accuracy by clustering encoded test data (network trained on train data)
 # cluster_test_input: classification accuracy by clustering test data in input space (without training or encoding)
 # cluster_train_latent: classification accuracy by classifying encoded test data using centroids from clustering encoded train data'''
     with open(savefile_single_runs, 'w') as log_file:
-        column_labels = '\t'.join(['arch', 'beta', 'clust_test_latent', 'clust_test_input', 'clust_train_latent'])#classification_latent_with_train_centroids'])
+        column_labels = '\t'.join(['arch', 'beta', 'comment',
+                                   'clust_test_latent',
+                                   'clust_train_latent',
+                                   'clust_test_input'])
         log_file.write(header_txt + '\n' + column_labels + '\n')
 
 if args.meta_graph is not None:
@@ -89,7 +101,6 @@ if args.meta_graph is not None:
 else:
     # load most recently trained vae model (assuming it hasen't been first reloaded)
     log_folders = [path for path in glob.glob('./' + LOG_FOLDER + '/*') if not 'reloaded' in path]
-    print('LOG FOLDERS\n', log_folders)
     log_folders.sort(key=os.path.getmtime)
     META_GRAPH = log_folders[-1]
 
@@ -141,8 +152,7 @@ for n in range(args.repeat):
     print('Loading trained vae model from {}'.format(last_ckpt_path))
     vae = VAE(meta_graph=last_ckpt_path)
 
-    ## CLASSIFY BY CLUSTERING ENCODED TEST DATA (network trained on train data)
-    if args.clust_test_latent:
+    if 'test_latent' in args.cluster or 'train_latent' in args.cluster:
         # encode mnist.test into latent space for clustering
         mu, log_sigma = vae.encode(mnist.test.images)
         if args.sample_latent:
@@ -151,42 +161,64 @@ for n in range(args.repeat):
             # cluster using only the mean
             test_latent = mu
 
-        # do clustering
-        clust_test_latent = hierarchical_clustering(
-            test_latent, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
-            plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
-            num_clusters=10, max_dist=None, true_labels=mnist.test.labels,
-            assign_clusters_with_label_count=args.assign_with_count
-        )
-        label_list.append(clust_test_latent.labels)
-        label_names.append('hierarchical_clustering')
+    ## CLASSIFY BY CLUSTERING ENCODED TEST DATA (network trained on train data)
+    if 'test_latent' in args.cluster:
+        # do clustering of test data in latent space
+        if args.method == 'hierarchical':
+            clust_test_latent = hierarchical_clustering(
+                test_latent, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
+                plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
+                num_clusters=args.num_clusters, max_dist=None, true_labels=mnist.test.labels,
+                assign_clusters_with_label_count=args.assign_with_count,
+                assign_labels_by_probability=args.assign_by_prob,
+                distinct_labels=args.allow_same_labels
+            )
+        else:  # args.method == 'kmeans'
+            clust_test_latent = kmeans_clustering(
+                test_latent, args.num_clusters, true_labels=mnist.test.labels,
+                assign_clusters_with_label_count=args.assign_with_count,
+                assign_labels_by_probability=args.assign_by_prob,
+                distinct_labels=args.allow_same_labels
+            )
+        label_list.append(clust_test_latent.data_labels)
+        label_names.append('{}_clustering'.format(args.method))
 
         # calculate classification accuracy
-        accuracy_clust_test_latent = np.sum(mnist.test.labels == clust_test_latent.labels) / mnist.test.num_examples
-        print('Classification accuracy after HIERARCHICAL CLUSTERING of TEST data in LATENT space is '
-              '{}\n'.format(accuracy_clust_test_latent))
+        accuracy_clust_test_latent = np.sum(mnist.test.labels == clust_test_latent.data_labels) / mnist.test.num_examples
+        print('Classification accuracy after {} CLUSTERING of TEST data in LATENT space is '
+              '{}\n'.format(args.method.upper(), accuracy_clust_test_latent))
     else:
         accuracy_clust_test_latent = np.nan
     accuracy_clust_test_latent_list.append(accuracy_clust_test_latent)
 
 
-    if args.clust_test_input:
+    if 'test_input' in args.cluster:
         # do clustering in input space
         shape = mnist.test.images.shape
         test_images_flat = mnist.test.images.reshape((shape[0], shape[1] * shape[2] * shape[3]))
-        clust_test_input = hierarchical_clustering(
-            test_images_flat, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
-            plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
-            num_clusters=10, max_dist=None, true_labels=mnist.test.labels,
-            assign_clusters_with_label_count=args.assign_with_count
-        )
-        label_list.append(clust_test_input.labels)
-        label_names.append('hierarchical_clustering_x_input')
+        if args.methos == 'hierarchical':
+            clust_test_input = hierarchical_clustering(
+                test_images_flat, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
+                plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
+                num_clusters=args.num_clusters, max_dist=None, true_labels=mnist.test.labels,
+                assign_clusters_with_label_count=args.assign_with_count,
+                assign_labels_by_probability=args.assign_by_prob,
+                distinct_labels=args.allow_same_labels
+            )
+        else:  # args.method == 'kmeans'
+            clust_test_input = kmeans_clustering(
+                test_images_flat, args.num_clusters, true_labels=mnist.test.labels,
+                assign_clusters_with_label_count=args.assign_with_count,
+                assign_labels_by_probability=args.assign_by_prob,
+                distinct_labels=args.allow_same_labels
+            )
+        label_list.append(clust_test_input.data_labels)
+        label_names.append('{}_clustering_x_input'.format(args.method))
 
         # calculate classification accuracy
-        accuracy_clust_test_input = np.sum(mnist.test.labels == clust_test_input.labels) / mnist.test.num_examples
-        print('Classification accuracy after HIERARCHICAL CLUSTERING of TEST data in INPUT space is '
-              '{}\n'.format(accuracy_clust_test_input))
+        accuracy_clust_test_input = np.sum(mnist.test.labels == clust_test_input.data_labels) / mnist.test.num_examples
+        print('Classification accuracy after {} CLUSTERING of TEST data in INPUT space is '
+              '{}\n'.format(args.method.upper(), accuracy_clust_test_input))
     else:
         accuracy_clust_test_input = np.nan
     accuracy_clust_test_input_list.append(accuracy_clust_test_input)
@@ -194,7 +226,7 @@ for n in range(args.repeat):
 
 
     ## CLASSIFY ENCODED TEST DATA BY USING CENTROIDS FROM CLUSTERING ENCODED TRAIN DATA
-    if args.clust_train_latent:
+    if 'train_latent' in args.cluster:
         ## (network trained on train data)
         # encode mnist.train into latent space for clustering
         mu, log_sigma = vae.encode(mnist.train.images)
@@ -205,14 +237,24 @@ for n in range(args.repeat):
             train_latent = mu
 
         # do clustering
-        clust_train_latent = hierarchical_clustering(
-            train_latent, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
-            plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
-            num_clusters=10, max_dist=None, true_labels=mnist.train.labels,
-            assign_clusters_with_label_count=args.assign_with_count
-        )
+        if args.method == 'hierarchical':
+            clust_train_latent = hierarchical_clustering(
+                train_latent, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
+                plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
+                num_clusters=args.num_clusters, max_dist=None, true_labels=mnist.train.labels,
+                assign_clusters_with_label_count=args.assign_with_count,
+                assign_labels_by_probability=args.assign_by_prob,
+                distinct_labels=args.allow_same_labels
+            )
+        else:  # args.method == 'kmeans'
+            clust_test_input = kmeans_clustering(
+                train_latent, args.num_clusters, true_labels=mnist.train.labels,
+                assign_clusters_with_label_count=args.assign_with_count,
+                assign_labels_by_probability=args.assign_by_prob,
+                distinct_labels=args.allow_same_labels
+            )
         # classify test data by closest cluster centroid
-        classify_test_labels = clust_train_latent.assign_to_nearest_cluster(test_latent)
+        classify_test_labels = clust_train_latent.classify_by_nearest_cluster(test_latent)
         label_names.append('classification_from_train_clusters')
 
         label_list.append(classify_test_labels)
@@ -220,8 +262,8 @@ for n in range(args.repeat):
         # calculate classification accuracy
         accuracy_clust_train_latent = np.sum(mnist.test.labels == classify_test_labels) / mnist.test.num_examples
         print('Classification accuracy after CLASSIFICATION of TEST data in LATENT space using nearest '
-              'centroids from hierarchical clustering of train data in latent space is '
-              '{}\n'.format(accuracy_clust_train_latent))
+              'centroids from {} clustering of train data in latent space is '
+              '{}\n'.format(args.method, accuracy_clust_train_latent))
     else:
         accuracy_clust_train_latent = np.nan
     accuracy_clust_train_latent_list.append(accuracy_clust_train_latent)
@@ -236,27 +278,28 @@ for n in range(args.repeat):
                          create_sprite=True)
 
     with open(savefile_single_runs, 'a') as log_file:
-        txt = '{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(args.beta[0]),
-                                                        accuracy_clust_test_latent, accuracy_clust_train_latent,
+        txt = '{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(beta), args.comment,
+                                                        accuracy_clust_test_latent,
+                                                        accuracy_clust_train_latent,
                                                         accuracy_clust_test_input)
         print('Saving single run clustering accuracies in {}'.format(savefile_single_runs))
         log_file.write(txt)
 
-accuracy_mean = np.mean(accuracy_clust_test_latent_list)
-accuracy_std = np.std(accuracy_clust_test_latent_list)
+accuracy_clust_test_latent_mean = np.mean(accuracy_clust_test_latent_list)
+accuracy_clust_test_latent_std = np.std(accuracy_clust_test_latent_list)
 accuracy_clust_train_latent_mean = np.mean(accuracy_clust_train_latent_list)
 accuracy_clust_train_latent_std = np.std(accuracy_clust_train_latent_list)
 accuracy_clust_test_input_mean = np.mean(accuracy_clust_test_input_list)
 accuracy_clust_test_input_std = np.std(accuracy_clust_test_input_list)
 
 with open(savefile, 'a') as log_file:
-    mean_txt = '{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(args.beta[0]), 'mean', args.repeat,
-                                                                 accuracy_mean,
+    mean_txt = '{}\t{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(beta), args.comment, 'mean', args.repeat,
+                                                                 accuracy_clust_test_latent_mean,
                                                                  accuracy_clust_train_latent_mean,
                                                                  accuracy_clust_test_input_mean)
     log_file.write(mean_txt)
-    std_txt = '{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(args.beta[0]), 'std', args.repeat,
-                                                                 accuracy_std,
+    std_txt = '{}\t{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(beta), args.comment, 'std', args.repeat,
+                                                                 accuracy_clust_test_latent_std,
                                                                  accuracy_clust_train_latent_std,
                                                                  accuracy_clust_test_input_std)
     log_file.write(std_txt)
