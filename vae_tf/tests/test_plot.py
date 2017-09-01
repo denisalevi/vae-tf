@@ -19,20 +19,20 @@ def test_plot_accuracies():
     plot_accuracies(testfile, show_figure=False)
     plot_accuracies(testfile, show_figure=False)
     plot_accuracies(testfile, show_figure=False, sort_by='arch')
-    plot_accuracies(testfile, show_figure=False, sort_by='arch', index=0.9)
-    plot_accuracies(testfile, show_figure=False, sort_by='beta', index='[500, 500, 8]')
+    plot_accuracies(testfile, show_figure=False, sort_by='arch', index={'beta':0.9})
+    plot_accuracies(testfile, show_figure=False, sort_by='beta', index={'arch':'[500, 500, 8]'})
     plot_accuracies(testfile, show_figure=False, kind='line')
     plot_accuracies(testfile, show_figure=False, sort_by='clust_test_latent')
     plot_accuracies(testfile, show_figure=False, sort_by='clust_test_input')
-    plot_accuracies(testfile, show_figure=False, sort_by='clust_test_input', index='[500, 500, 8]')
+    plot_accuracies(testfile, show_figure=False, sort_by='clust_test_input', index={'arch':'[500, 500, 8]'})
     
     # check if wrong fucntion calls raise errors
     assert_raises(ValueError, plot_accuracies, testfile, sort_by='jibberish', show_figure=False)
-    assert_raises(KeyError, plot_accuracies, testfile, sort_by='beta', index=0.9, show_figure=False)
-    assert_raises(KeyError, plot_accuracies, testfile, sort_by='arch',
-                  index='[500, 500, 8]', show_figure=False)
-    assert_raises(KeyError, plot_accuracies, testfile, sort_by='clust_test_latent',
-                  index='[500, 500, 8, 2]', show_figure=False)
+    assert_raises(KeyError, plot_accuracies, testfile, sort_by='beta', index={'beta':0.9}, show_figure=False)
+    assert_raises(ValueError, plot_accuracies, testfile, sort_by='arch',
+                  index={'beta':'[500, 500, 8]'}, show_figure=False)
+    assert_raises(ValueError, plot_accuracies, testfile, sort_by='clust_test_latent',
+                  index={'beta':'[500, 500, 8, 2]'}, show_figure=False)
 
 if __name__ == '__main__':
     test_plot_accuracies()

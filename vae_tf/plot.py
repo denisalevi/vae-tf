@@ -1,5 +1,6 @@
-import itertools
 import os
+import itertools
+import fnmatch
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -237,9 +238,10 @@ def fancy_dendrogram(*args, **kwargs):
     return ddata
 
 
-def plot_accuracies(accuracy_file, sort_by=None, index=None, kind='bar',
+def plot_accuracies(accuracy_file, sort_by=None, index=None, kind='barh',
                     plot_columns=None, save_figure=None, show_figure=True,
-                    rot=60, alpha=0.8, **plot_kwargs):
+                    left_adjust=None, annotate_bars=True, ticks=True,
+                    **plot_kwargs):
     '''
     Visualize accuracies from a log file created by run_clustering.py
 
@@ -250,10 +252,10 @@ def plot_accuracies(accuracy_file, sort_by=None, index=None, kind='bar',
     sort_by : str, optional
         What to sort accuracies by. Can be 'arch' for architecture, 'beta' for the beta-VAE
         beta or any accuracy column name from the accuracy_file. Does not sort by default.
-    index : str or float, optional
-        Only plot a specified index from the accuracy matrix. Can be an architecture
-        (e.g. '[500, 500, 10]') or a beta value (e.g. 1.0), but not the same as specified
-        in sort_by.
+    index : dict, optional
+        Only plot a specified index from the accuracy matrix. Keys can be
+        column or index names, values can be single values or include UNIX
+        wildcards ('*', '!', '?').
     kind : str, optional
         What kind of plot to use (default 'bar'), will be passed to pandas.DataFrame.plot().
     plot_columns : list(str), optional
@@ -262,74 +264,89 @@ def plot_accuracies(accuracy_file, sort_by=None, index=None, kind='bar',
         What to save the plot as (default None, doen't save).
     show_figure : bool, optional
         Weather or not to show the figure after creation.
-    rot : int, optional
-        Rotation of xtick labels.
-    alpha : float, optional
-        Alpha value (transparency) of plot.
+    left_adjust : float, optional
+        Subplots left margin (default None leaves matplotlib default).
+    ticks : bool, optional
+        If False, don't show y tick labels (default True).
     **plot_kwargs
         Keyword arguments past to pandas.DataFrame.plot().
     '''
-    df = pd.read_csv(accuracy_file, delimiter='\t', index_col=[0, 1, 2], comment='#')
+    df = pd.read_csv(accuracy_file, delimiter='\t', index_col=[0, 1, 2, 3], comment='#')
+    df_idx_slice = df
     if index is not None:
-        if sort_by == 'beta':
-            idx_levels = ['arch']
-        elif sort_by == 'arch':
-            idx_levels = ['beta']
-        else:
-            idx_levels = ['arch', 'beta']
-
-        error = False
-        for level in idx_levels:
-            try:
-                # get the DataFrame slice for given index
-                df_idx_slice = df.xs(index, level=level)
-                error = False
-                break
-            except KeyError as err:
-                error = err
-                pass
-
-        if error:
-            raise KeyError("index has to be in {} if sort_by is {}"
-                           ", got problem with: {} (maybe a type proble?)".format(
-                               idx_levels, sort_by, error))
-
-    else:  # index is None
-        df_idx_slice = df
+        for idx_level, idx in index.items():
+            # idx needs to be str for `if '*' in idx` to not raise an error
+            idx = str(idx)
+            if '*' in idx or '?' in idx or '[!' in idx:
+                if idx_level in df_idx_slice.index.names:
+                    idx_in_idx_names = df_idx_slice.index.names.index(idx_level)
+                    match_options = []
+                    for df_idx in df_idx_slice.index:
+                        idx_in_idx_names = df_idx_slice.index.names.index(idx_level)
+                        match_options.append(df_idx[idx_in_idx_names])
+                    idx_options = df_idx_slice.index
+                elif idx_level in df_idx_slice.columns:
+                    match_options = df_idx_slice[idx_level]
+                    idx_options = match_options.index
+                else:
+                    raise ValueError('index key `{}` not in data'.format(idx_level))
+                idx_matches = []
+                for df_idx, option in zip(idx_options, match_options):
+                    if fnmatch.fnmatch(str(option), idx):
+                        idx_matches.append(df_idx)
+                df_idx_slice = df_idx_slice.loc[idx_matches]
+            else:
+                if idx_level in df_idx_slice.index.names:
+                    if idx_level == 'beta':
+                        try:
+                            idx = float(idx)
+                        except ValueError:
+                            raise ValueError("Got `{}` for `beta` index. Can't convert to float."
+                                             .format(idx))
+                    df_idx_slice = df_idx_slice.xs(idx, level=idx_level)
+                elif idx_level in df_idx_slice.columns:
+                    assert False, 'not implemented'
+                else:
+                    raise ValueError('index key `{}` not in data'.format(idx_level))
 
     # get DataFrame slices for mean and std
     df_mean_slice = df_idx_slice.xs('mean', level='stat')
     df_std_slice = df_idx_slice.xs('std', level='stat')
 
+    mean = df_mean_slice
+    std = df_std_slice
     if sort_by is not None:
-        # sort the mean slice
-        if sort_by in ['beta', 'arch']:
-            mean = df_mean_slice.sort_index(level=sort_by, ascending=False)
-        elif sort_by in df.columns:
-            mean = df_mean_slice.sort_values(by=sort_by, ascending=False)
-        else:
-            raise ValueError("sort_by has to be 'arch', 'beta' or a column "
-                             "in accuracy_file, got {}".format(sort_by))
+        if isinstance(sort_by, str):
+            sort_by = [sort_by]
 
+        for sorter in reversed(sort_by):
+            if sorter in df.index.names:
+                mean = mean.sort_index(level=sorter, sort_remaining=False)#, ascending=False)
+            elif sorter in df.columns:
+                mean = mean.sort_values(by=sorter)#, ascending=False)
+            else:
+                raise ValueError("sort_by has to be 'arch', 'beta' or a column "
+                                 "in accuracy_file, got {}".format(sort_by))
         # reindex std slice with indices from sorted mean slice
         std = df_std_slice.reindex(mean.index)
-
-    else:  # sort_by is None
-        mean = df_mean_slice
-        std = df_std_slice
 
     # plot
     if plot_columns is None:
         plot_columns = ['clust_test_latent', 'clust_test_input', 'clust_train_latent']
     with plt.rc_context({'figure.autolayout': True}):
         axes = mean.plot(y=plot_columns,
-                         yerr=std[plot_columns],
+                         xerr=std[plot_columns],
                          kind=kind,
-                         rot=rot,
-                         alpha=alpha,
                          **plot_kwargs)
+        if not ticks:
+            plt.tick_params(axis='y', labelleft='off')
+        if annotate_bars:
+            for p in axes.patches:
+                axes.annotate('{:.3f}'.format(p.get_width()), (p.get_width() * 1.005, p.get_y() * 1.005))
         axes.autoscale(tight=False)
         plt.tight_layout = True
+        if left_adjust is not None:
+            plt.gcf().subplots_adjust(left=left_adjust)
         if save_figure is not None:
             plt.savefig(save_figure)
         elif show_figure:
