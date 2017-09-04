@@ -11,18 +11,6 @@ def print_(var, name: str, first_n=5, summarize=5):
     return tf.Print(var, [var], "{}: ".format(name), first_n=first_n,
                     summarize=summarize)
 
-def get_mnist(n, mnist):
-    """Returns 784-D numpy array for random MNIST digit `n`"""
-    assert 0 <= n <= 9, "Must specify digit 0 - 9!"
-
-    SIZE = 500
-    imgs, labels = mnist.train.next_batch(SIZE)
-    idxs = iter(random.sample(range(SIZE), SIZE)) # non-in-place shuffle
-
-    for i in idxs:
-        if labels[i] == n:
-            return imgs[i] # first match
-
 def variable_summaries(variable, scope_name=None):
     """Attach a lot of summaries to a Tensor (for TensorBoard visualization)."""
     with tf.name_scope(scope_name, default_name='{}_summaries'.format(variable.op.name)):
@@ -194,8 +182,9 @@ def fc_or_conv_arg(string):
     '''
     try:
         return int(string)
-    except:
+    except ValueError:
         pass
+
     try:
         args = string.split(" ")
         assert 2 <= len(args) <= 4
@@ -211,7 +200,75 @@ def fc_or_conv_arg(string):
         return tuple(out)
     except:
         pass
-    msg = 'argmuents must be integer (FC layer) or strings of 2 to 4 space '\
+
+    msg = 'Argmuents must be integer (FC layer) or strings of 2 to 4 space '\
           'seperated values (CONV layer) where the first 3 values must be '\
-          'integers and the last must be `SAME` or `VALID`'
+          'integers and the last must be `SAME` or `VALID`. Got `{}`'\
+          .format(string)
     raise argparse.ArgumentTypeError(msg)
+
+# Adapted from https://github.com/InFoCusp/tf_cnnvis/blob/master/tf_cnnvis/utils.pyp
+def convert_into_grid(Xs, padding=1, grid_dims=None):
+    '''
+    Convert 4-D numpy array into a grid image
+
+    Parameters
+    ----------
+    Xs : ndarray
+        4D array of images to make grid out of it
+    padding : int, optional
+        padding size between grid cells
+    grid_dims : list, optional
+        length 2 list of grid dimensions
+
+    Returns
+    -------
+    ndarray
+        3D array, grid of input images 
+    '''
+    (N, H, W, C) = Xs.shape
+    if grid_dims is None:
+        grid_size_h = grid_size_w = int(np.ceil(np.sqrt(N)))
+    else:
+        assert len(grid_dims) == 2
+        grid_size_h, grid_size_w = grid_dims
+    grid_height = H * grid_size_h + padding * (grid_size_h - 1)
+    grid_width = W * grid_size_w + padding * (grid_size_w - 1)
+    grid = np.ones((grid_height, grid_width, C))
+    next_idx = 0
+    y0, y1 = 0, H
+    for y in range(grid_size_h):
+        x0, x1 = 0, W
+        for x in range(grid_size_w):
+            if next_idx < N:
+                grid[y0:y1, x0:x1] = Xs[next_idx]
+                next_idx += 1
+            x0 += W + padding
+            x1 += W + padding
+        y0 += H + padding
+        y1 += H + padding
+    return grid#.astype('uint8')
+def _images_to_grid(images):
+    """
+    Convert a list of arrays of images into a list of grid of images
+
+    :param images: 
+        a list of 4-D numpy arrays(each containing images)
+    :type images: list
+
+    :return: 
+        a list of grids which are grid representation of input images
+    :rtype: list
+    """
+    grid_images = []
+    # if 'images' is not empty convert
+    # list of images into grid of images
+    if len(images) > 0:
+        N = len(images)
+        H, W, C = images[0][0].shape
+        for j in range(len(images[0])):
+            tmp = np.zeros((N, H, W, C))
+            for i in range(N):
+                tmp[i] = images[i][j]
+            grid_images.append(np.expand_dims(convert_into_grid(tmp), axis = 0))
+    return grid_images

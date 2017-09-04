@@ -12,6 +12,7 @@ from vae_tf.vae import VAE
 from vae_tf.clustering import hierarchical_clustering, kmeans_clustering
 from vae_tf.utils import random_subset, fc_or_conv_arg
 from vae_tf.mnist_helpers import load_mnist
+from vae_tf.plot import morph, explore_latent_space_dimensions
 
 import argparse
 parser = argparse.ArgumentParser(description='Run classification')
@@ -22,7 +23,7 @@ parser.add_argument('--arch', nargs='*', type=str, default=None,
 parser.add_argument('--save', type=str, default='./accuracies.txt',
                     help='Where to save accuracies (appending)')
 parser.add_argument('--cluster', nargs='+', default=['test_latent'],
-                    choices=['test_latent', 'test_input', 'train_latent'],
+                    choices=['test_latent', 'test_input', 'train_latent', 'all'],
                     help='Choose what to cluster.')
 parser.add_argument('--method', type=str, default='hierarchical', choices=['kmeans', 'hierarchical'],
                     help='Cluster method to use')
@@ -46,6 +47,8 @@ parser.add_argument('--assign_by_prob', action='store_true',
                     help='Assign cluster labels from data point that has the highest probability to belong to that cluster.')
 parser.add_argument('--allow_same_labels', action='store_false',  # will be passed as distinct_labels argument
                     help='Allow multiple clusters to get the same cluster label')
+parser.add_argument('--save_pngs', nargs='?', default=None, type=str, const=True, 
+                    help='Save figures as pngs. Optionally pass target folder as argument.')
 args = parser.parse_args()
 
 # suppress tf log
@@ -58,6 +61,9 @@ if args.log_folder:
     LOG_FOLDER = 'log_' + args.log_folder
 else:
     LOG_FOLDER = 'log'
+
+if 'all' in args.cluster:
+    args.cluster = ['test_latent', 'test_input', 'train_latent']
 
 if not args.sample_latent and args.repeat > 1:
     print("WARNING: repeating clustering without sampling in latent space. Waste of time, the results should be deterministic!")
@@ -141,6 +147,8 @@ last_ckpt_path = os.path.abspath(last_ckpt)
 # seed = np.random.randint()  # TODO what should be the range of the seed?
 seed = None#1234
 
+all_clust_results = {}
+last_clust_accuracies = {}
 accuracy_clust_test_latent_list = []
 accuracy_clust_train_latent_list = []
 accuracy_clust_test_input_list = []
@@ -187,6 +195,9 @@ for n in range(args.repeat):
         accuracy_clust_test_latent = np.sum(mnist.test.labels == clust_test_latent.data_labels) / mnist.test.num_examples
         print('Classification accuracy after {} CLUSTERING of TEST data in LATENT space is '
               '{}\n'.format(args.method.upper(), accuracy_clust_test_latent))
+
+        all_clust_results['test_latent'] = clust_test_latent
+        last_clust_accuracies['test_latent'] = accuracy_clust_test_latent
     else:
         accuracy_clust_test_latent = np.nan
     accuracy_clust_test_latent_list.append(accuracy_clust_test_latent)
@@ -196,7 +207,7 @@ for n in range(args.repeat):
         # do clustering in input space
         shape = mnist.test.images.shape
         test_images_flat = mnist.test.images.reshape((shape[0], shape[1] * shape[2] * shape[3]))
-        if args.methos == 'hierarchical':
+        if args.method == 'hierarchical':
             clust_test_input = hierarchical_clustering(
                 test_images_flat, linkage_method='ward', distance_metric='euclidean', check_cophonetic=False,
                 plot_dir=os.path.join(vae.log_dir, 'cluster_plots'), truncate_dendrogram=50,
@@ -247,7 +258,7 @@ for n in range(args.repeat):
                 distinct_labels=args.allow_same_labels
             )
         else:  # args.method == 'kmeans'
-            clust_test_input = kmeans_clustering(
+            clust_train_latent = kmeans_clustering(
                 train_latent, args.num_clusters, true_labels=mnist.train.labels,
                 assign_clusters_with_label_count=args.assign_with_count,
                 assign_labels_by_probability=args.assign_by_prob,
@@ -264,6 +275,9 @@ for n in range(args.repeat):
         print('Classification accuracy after CLASSIFICATION of TEST data in LATENT space using nearest '
               'centroids from {} clustering of train data in latent space is '
               '{}\n'.format(args.method, accuracy_clust_train_latent))
+
+        all_clust_results['train_latent'] = clust_train_latent
+        last_clust_accuracies['train_latent'] = accuracy_clust_train_latent
     else:
         accuracy_clust_train_latent = np.nan
     accuracy_clust_train_latent_list.append(accuracy_clust_train_latent)
@@ -284,6 +298,35 @@ for n in range(args.repeat):
                                                         accuracy_clust_test_input)
         print('Saving single run clustering accuracies in {}'.format(savefile_single_runs))
         log_file.write(txt)
+
+
+## Latent space visualisation around cluster centroids
+with tf.variable_scope('latent_space'):
+    # morph btwn cluster centroids for each cluster type (only last run if args.repeat)
+    for cluster_name in all_clust_results.keys():
+        cluster_result = all_clust_results[cluster_name]
+        accuracy = last_clust_accuracies[cluster_name]
+        print('Morphing latent space cluster centroid from clustering {}'.format(cluster_name))
+        morph(vae, cluster_result.cluster_centroids,
+              name='morph_centroids_{}_{}'.format(cluster_name, accuracy),
+              tf_summary=True, save_png=args.save_pngs)
+
+    # explore single latent dimensions for a cluster centroid from the run with highest accuracy
+    # choose clustering centroids from cluster run with highest accuracy
+    cluster_name = max(last_clust_accuracies, key=last_clust_accuracies.get)
+    cluster_result = all_clust_results[cluster_name]
+    # choose random cluster centroid
+    centroid_idx = np.random.randint(0, args.num_clusters)
+    amplitude = 5
+    print('Morphing around single latent dimensions of cluster centroid {} from clustering {}'
+          .format(cluster_idx, cluster_name))
+    explore_latent_space_dimensions(vae, amplitude, n=9,
+                                    origin=cluster_result.cluster_centroids[centroid_idx],
+                                    name='explore_latent_dims_{}_centroid-{}_amp-{}'.format(
+                                        cluster_name, centroid_idx, amplitude),
+                                    tf_summary=vae.validation_writer_dir,
+                                    save_png=args.save_pngs)
+
 
 accuracy_clust_test_latent_mean = np.mean(accuracy_clust_test_latent_list)
 accuracy_clust_test_latent_std = np.std(accuracy_clust_test_latent_list)

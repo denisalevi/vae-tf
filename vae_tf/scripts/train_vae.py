@@ -102,14 +102,23 @@ def interpolate_digits(model, mnist):
     plot.interpolate(model, *mus, name="interpolate_{}->{}".format(
         *(labels[i] for i in idxs)), outdir=model.png_dir)
 
-def plot_all_end_to_end(model, mnist):
-    names = ("train", "validation", "test")
-    datasets = (mnist.train, mnist.validation, mnist.test)
-    for name, dataset in zip(names, datasets):
-        x, _ = dataset.next_batch(10)
-        x_reconstructed = model.vae(x)
-        plot.plotSubset(model, x, x_reconstructed, n=10, name=name,
-                        outdir=model.png_dir)
+def plot_all_end_to_end(model, mnist, tf_summary=True, save_png=None,
+                        show_plot=False, datasets=['train', 'validation']):
+    names = tuple(datasets)
+    datasets = tuple([getattr(mnist, name) for name in names])
+    with tf.variable_scope('reconstructions'):
+        for name, dataset in zip(names, datasets):
+            print('endo to end name', name)
+            x, _ = dataset.next_batch(10)
+            x_reconstructed = model.vae(x)
+            if tf_summary:
+                if name == 'train':
+                    tf_summary = model.train_writer_dir
+                elif name == 'validation':
+                    tf_summary = model.validation_writer_dir
+            plot.plotSubset(model, x, x_reconstructed, n=10, name=name,
+                            tf_summary=tf_summary, save_png=save_png,
+                            show_plot=show_plot), 
 
 def morph_numbers(model, mnist, ns=None, n_per_morph=10):
     if not ns:
@@ -146,6 +155,8 @@ if __name__ == "__main__":
                         help='Number of batches after which to stop training')
     parser.add_argument('--create_embedding', action='store_true',
                         help='Create an embedding of test data for TensorBoard')
+    parser.add_argument('--save_pngs', nargs='?', default=None, type=str, const=True, 
+                        help='Save figures as pngs. Optionally pass target folder as argument.')
     args = parser.parse_args()
 
     # change model parameters given at start of this file when passed as command-line argument
@@ -230,20 +241,20 @@ if __name__ == "__main__":
             VISUALIZE_DIGITS = [random.randint(0, 9)]
 
         for digit in VISUALIZE_DIGITS:
-            x_in = np.expand_dims(get_mnist(digit, mnist), 0)
+            x_in = np.expand_dims(get_mnist(digit, mnist, dataset='test'), 0)
 
             if ACTIVATION_VISUALIZATION:
                 activation_visualization(graph_or_path=meta_graph_file,
                                          value_feed_dict={model.x_in: x_in},
                                          layers=conv_layers+deconv_layers,#['c'],
-                                         path_logdir=os.path.join(model.log_dir, 'viz'),
+                                         path_logdir=model.validation_writer_dir,
                                          path_outdir=CNNVIS_OUTDIR,
                                          name_suffix=str(digit))
             if DECONV_VISUALIZATION:
                 deconv_visualization(graph_or_path=meta_graph_file,
                                      value_feed_dict={model.x_in: x_in},
                                      layers=conv_layers,#['c'],
-                                     path_logdir=os.path.join(model.log_dir, 'viz'),
+                                     path_logdir=model.validation_writer_dir,
                                      path_outdir=CNNVIS_OUTDIR,
                                      name_suffix=str(digit))
 
@@ -251,4 +262,4 @@ if __name__ == "__main__":
     if args.plot_all:
         all_plots(model, mnist)
     elif not args.no_plots:
-        plot_all_end_to_end(model, mnist)
+        plot_all_end_to_end(model, mnist, tf_summary=True, save_png=args.save_pngs)

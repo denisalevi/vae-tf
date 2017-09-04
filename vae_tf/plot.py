@@ -7,45 +7,31 @@ import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
+import tensorflow as tf
 
 from scipy.cluster.hierarchy import dendrogram
 
+from vae_tf.utils import convert_into_grid
+
 def plotSubset(model, x_in, x_reconstructed, n=10, cols=None, outlines=True,
-               save=True, name="subset", outdir="."):
+               tf_summary=None, save_png=None, show_plot=False, name="reconstruction"):
     """Util to plot subset of inputs and reconstructed outputs"""
-    n = min(n, x_in.shape[0])
-    cols = (cols if cols else n)
-    rows = 2 * int(np.ceil(n / cols)) # doubled b/c input & reconstruction
+    # TODO wtf combing this with end-to-end reconstruction... or check what its used for in vae.py
 
-    plt.figure(figsize = (cols * 2, rows * 2))
-    dim = int(model.architecture[0]**0.5) # assume square images
+    if tf_summary or save_png or show_plot:
+        if tf_summary and not isinstance(tf_summary, str):
+            # tf_summary == True, set default
+            assert isinstance(tf_summary, bool), '`tf_summar` needs to be `str` or `bool`'
+            tf_summary = model.validation_writer_dir
 
-    def drawSubplot(x_, ax_):
-        plt.imshow(x_.reshape([dim, dim]), cmap="Greys")
-        if outlines:
-            ax_.get_xaxis().set_visible(False)
-            ax_.get_yaxis().set_visible(False)
-        else:
-            ax_.set_axis_off()
+        if save_png and not isinstance(save_png, str):
+            # save_png == True, set default
+            assert isinstance(save_png, bool), '`save_png` needs to be `str` or `bool`'
+            save_png = model.png_dir
 
-    for i, x in enumerate(x_in[:n], 1):
-        # display original
-        ax = plt.subplot(rows, cols, i) # rows, cols, subplot numbered from 1
-        drawSubplot(x, ax)
-
-    for i, x in enumerate(x_reconstructed[:n], 1):
-        # display reconstruction
-        ax = plt.subplot(rows, cols, i + cols * (rows / 2))
-        drawSubplot(x, ax)
-
-    # plt.show()
-    if save:
-        model_name, *_ = model.get_new_layer_architecture(model.architecture)
-        title = "{}_batch_{}_round_{}_{}.png".format(
-            model.datetime, model_name, model.step, name)
-        plt.savefig(os.path.join(outdir, title), bbox_inches="tight")
-        plt.close()
-
+        all_xs = np.vstack([x_in, x_reconstructed])
+        _create_grid_image(all_xs, name, grid_dims=(2, n), tf_summary=tf_summary,
+                           model=model, save_png=save_png, show_plot=show_plot)
 
 def plotInLatent(model, x_in, labels=[], range_=None, title=None,
                  save=True, name="data", outdir="."):
@@ -151,6 +137,42 @@ def interpolate(model, latent_1, latent_2, n=20, save=True, name="interpolate", 
         plt.close()
 
 
+def explore_latent_space_dimensions(model, amplitude, n=9, origin=None,
+                                    name='explore_latent_dims', tf_summary=None,
+                                    save_png=None, show_plot=False):
+    """Vary only single dimensions in latent space"""
+    
+    latent_dims = model.architecture[-1]
+    if origin is None:
+        origin = np.zeros(latent_dims)
+    all_xs =[]
+    for i in range(latent_dims):
+        latent_1 = origin.copy()
+        latent_2 = origin.copy()
+        latent_1[i] -= amplitude
+        latent_2[i] += amplitude
+        zs = np.array([np.linspace(start, end, n) # interpolate across every z dimension
+                       for start, end in zip(latent_1, latent_2)]).T
+        xs_reconstructed = model.decode(zs)
+        all_xs.extend(xs_reconstructed)
+    all_xs = np.stack(all_xs)
+
+    if tf_summary or save_png or show_plot:
+        grid_dims = (latent_dims, n)
+
+        if tf_summary and not isinstance(tf_summary, str):
+            # tf_summary == True, set default
+            assert isinstance(tf_summary, bool), '`tf_summar` needs to be `str` or `bool`'
+            tf_summary = model.validation_writer_dir
+
+        if save_png and not isinstance(save_png, str):
+            # save_png == True, set default
+            assert isinstance(save_png, bool), '`save_png` needs to be `str` or `bool`'
+            save_png = model.png_dir
+
+        _create_grid_image(all_xs, name, grid_dims=grid_dims, tf_summary=tf_summary,
+                           model=model, save_png=save_png, show_plot=show_plot)
+
 def justMNIST(x, save=True, name="digit", outdir="."):
     """Plot individual pixel-wise MNIST digit vector x"""
     DIM = 28
@@ -169,10 +191,37 @@ def justMNIST(x, save=True, name="digit", outdir="."):
         plt.close()
 
 
-def morph(model, zs, n_per_morph=10, loop=True, save=True, name="morph", outdir="."):
-    """Plot frames of morph between zs (np.array of 2+ latent points)"""
+def morph(model, zs, n_per_morph=10, loop=True, save_png=None, show_plot=False,
+          tf_summary=None, name="morph", grid_dims=None):
+    '''
+    Plot frames of morph between zs (np.array of 2+ latent points)
+
+    Parameters
+    ----------
+    model
+        VAE isntance
+    zs
+        list of latent space coords
+    n_per_morph
+    loop
+    save_png
+        If `None`, don't save. If `True`, save in `model.png_dir`, else
+        `save_png` is assumed to be the directory to save in.
+    show_plot
+        If True, show matplotlib plot.
+    tf_summary
+        If None, don't create summary. If True, create tensorflow image summary
+        in `model.validation_writer_dir`, else assume `tf_summary` is the
+        target directory.
+    save_every_number
+        Save every morphed number as matplotlib png
+    name
+    grid_dims
+
+    Returns
+    -------
+    '''
     assert len(zs) > 1, "Must specify at least two latent pts for morph!"
-    dim = int(model.architecture[0]**0.5) # assume square images
 
     def pairwise(iterable):
         """s -> (s0,s1), (s1,s2), (s2, s3), ..."""
@@ -185,31 +234,85 @@ def morph(model, zs, n_per_morph=10, loop=True, save=True, name="morph", outdir=
         zs = np.append(zs, zs[:1], 0)
 
     all_xs = []
+    num_rows = 0
     for z1, z2 in pairwise(zs):
         zs_morph = np.array([np.linspace(start, end, n_per_morph)
                              # interpolate across every z dimension
                              for start, end in zip(z1, z2)]).T
         xs_reconstructed = model.decode(zs_morph)
         all_xs.extend(xs_reconstructed)
+        num_rows += 1
+    all_xs = np.stack(all_xs)
 
-    for i, x in enumerate(all_xs):
-        plt.figure(figsize = (5, 5))
-        plt.imshow(x.reshape([dim, dim]), cmap="Greys")
+    if tf_summary or save_png or show_plot:
+        if grid_dims == None:
+            grid_dims = (num_rows, n_per_morph)
+        else:
+            assert grid_dims[0] * grid_dims[1] >= all_xs.shape[0],\
+                    '`grid_dims` are to small to fit all images'
 
-        # axes off
-        ax = plt.gca()
-        ax.set_frame_on(False)
-        ax.set_xticks([])
-        ax.set_yticks([])
-        plt.axis("off")
+        if tf_summary and not isinstance(tf_summary, str):
+            # tf_summary == True, set default
+            assert isinstance(tf_summary, bool), '`tf_summar` needs to be `str` or `bool`'
+            tf_summary = model.validation_writer_dir
 
-        # plt.show()
-        if save:
-            model_name, *_ = model.get_new_layer_architecture(model.architecture)
-            title = "{}_latent_{}_round_{}_{}.{}.png".format(
-                model.datetime, model_name, model.step, name, i)
-            plt.savefig(os.path.join(outdir, title), bbox_inches="tight")
-            plt.close()
+        if save_png and not isinstance(save_png, str):
+            # save_png == True, set default
+            assert isinstance(save_png, bool), '`save_png` needs to be `str` or `bool`'
+            save_png = model.png_dir
+
+        _create_grid_image(all_xs, name, grid_dims=grid_dims, tf_summary=tf_summary,
+                           model=model, save_png=save_png, show_plot=show_plot)
+
+def _create_grid_image(images, name, grid_dims=None, tf_summary=None, model=None,
+                       save_png=None, show_plot=False):
+        assert images.ndim == 4,\
+                '`images` needs to have 4 dims, got {}'.format(images.ndim)
+        assert tf_summary is not None or save_png is not None or show_plot is not None,\
+                'One of `tf_summary`, `save_png` and `show_plot` needs to be set'
+
+        if grid_dims is None:
+            # create square grid
+            num_images = images.shape[0]
+            dim = int(np.ceil(np.sqrt(num_images)))
+            grid_dims = (dim, dim)
+
+        # convert morphs into a single grid image
+        grid = convert_into_grid(images, grid_dims=grid_dims)
+        assert 0 <= grid.max() <= 1
+        assert grid.ndim == 3
+
+        if tf_summary:
+            assert isinstance(tf_summary, str), '`tf_summary` needs to be `str`'
+            assert model is not None, 'For `tf_summary`, `model` argument is needed'
+
+            grid = grid.reshape([1, *grid.shape])
+            image = tf.placeholder(tf.float32, shape=[None, None, None, None])
+            image_summary = tf.summary.image(name, grid)
+            summary_ran = model.sesh.run(image_summary, feed_dict={image : grid})
+
+            file_writer = tf.summary.FileWriter(tf_summary)
+            file_writer.add_summary(summary_ran)
+            file_writer.close() # close file writer
+
+        if save_png or show_plot:
+            grid = 1 - grid  # tf.image.summary seems to invert the image
+            plt.imshow(grid.reshape(*grid.shape[1:3]), cmap="Greys", interpolation='none')
+            plt.gca().axis('off')
+
+            if save_png:
+                assert isinstance(save_png, str), '`save_png` needs to be `str`'
+
+                try:
+                    os.mkdir(save_png)
+                except FileExistsError:
+                    pass
+
+                savefile = os.path.join(save_png, name + '.png')
+                plt.savefig(savefile)
+            
+            if show_plot:
+                plt.show()
 
 
 # taken from https://joernhees.de/blog/2015/08/26/scipy-hierarchical-clustering-and-dendrogram-tutorial/
