@@ -705,14 +705,16 @@ class VAE():
                     if verbose:
                         print("batch {} --> validation cost: {}".format(i_batch, validation_cost))
                     if plot_subsets_every_n is not None:
-                        plot.plotSubset(self, x, x_reconstructed, n=10, name="cross_validation",
-                                        outdir=plots_outdir)
+                        name = "reconstruction_cross_validation_step{}".format(self.step)
+                        plot.plotSubset(self, x, x_reconstructed, n=10, name=name,
+                                        save_png=plots_outdir)
 
                 ### PLOTTING
                 if plot_subsets_every_n is not None and i_batch % plot_subsets_every_n == 0:
                     # visualize `n` examples of current minibatch inputs + reconstructions
-                    plot.plotSubset(self, x, x_reconstructed, n=10, name="train",
-                                    outdir=plots_outdir)
+                    name = "reconstruction_train_step{}".format(self.step)
+                    plot.plotSubset(self, x, x_reconstructed, n=10, name=name,
+                                    save_png=plots_outdir)
                 if plot_latent_over_time:
                     while int(round(BASE**pow_)) == i_batch:  # logarithmic time
                         plot.exploreLatent(self, nx=30, ny=30, ppf=True, outdir=plots_outdir,

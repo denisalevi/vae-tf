@@ -281,12 +281,12 @@ def _create_grid_image(images, name, grid_dims=None, tf_summary=None, model=None
         grid = convert_into_grid(images, grid_dims=grid_dims)
         assert 0 <= grid.max() <= 1
         assert grid.ndim == 3
+        grid = grid.reshape([1, *grid.shape])
 
         if tf_summary:
             assert isinstance(tf_summary, str), '`tf_summary` needs to be `str`'
             assert model is not None, 'For `tf_summary`, `model` argument is needed'
 
-            grid = grid.reshape([1, *grid.shape])
             image = tf.placeholder(tf.float32, shape=[None, None, None, None])
             image_summary = tf.summary.image(name, grid)
             summary_ran = model.sesh.run(image_summary, feed_dict={image : grid})

@@ -93,7 +93,6 @@ def test_architecture_model_naming_and_reloading():
         [5, (5,5)],
         10  # if removed, remove [1:] in loop below
     ]
-    assert_raises(ValueError, VAE, arch, init=False, d_hyperparams={'img_dims': (28, 27)})
     myvae = VAE(arch, init=False, d_hyperparams={'img_dims': (28, 28)})
     model_name, *_ = myvae.get_new_layer_architecture(arch)
     split = model_name.split('_')

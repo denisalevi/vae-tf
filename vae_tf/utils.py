@@ -224,7 +224,8 @@ def convert_into_grid(Xs, padding=1, grid_dims=None):
     Returns
     -------
     ndarray
-        3D array, grid of input images 
+        3D array, grid of input images, shape (grid_height, grid_width,
+        channels)
     '''
     (N, H, W, C) = Xs.shape
     if grid_dims is None:
