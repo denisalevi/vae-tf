@@ -55,6 +55,7 @@ class VAE():
 
             * hyperparameters (optional dictionary of updates to `DEFAULTS`)
         """
+        # TODO use **hyperparams instead of d_hyperparams as __init__ arguments...
         self.__dict__.update(VAE.DEFAULTS, **d_hyperparams)
 
         if not init:
@@ -112,13 +113,27 @@ class VAE():
                 unique_idx += 1
 
             self.datetime = model_datetime
-            self.architecture, self.beta = self.get_architecture_from_model_name(model_name)
+            self.architecture, self.beta, img_dims = \
+                    self.get_architecture_from_model_name(model_name)
+
+            if img_dims is not None:
+                self.img_dims = img_dims
+            else:
+                print("WARNING: reloaded model has depricated naming scheme. "
+                      "Can't deduce image dimensions. Using {} (the value given "
+                      "in the constructer if given, else the class default)"
+                      .format(self.img_dims))
 
             # rebuild graph
             meta_graph = os.path.abspath(meta_graph)
             tf.train.import_meta_graph(meta_graph + ".meta").restore(
                 self.sesh, meta_graph)
             handles = self.sesh.graph.get_collection(VAE.RESTORE_KEY)
+
+        if self.img_dims[0] * self.img_dims[1] != self.architecture[0]:
+            raise ValueError("img_dims attribute `{}` and `architecture[0]={}` don't fit. "
+                             "The product of the former needs to be equal the latter."
+                             .format(self.img_dims, self.architecture[0]))
 
         # unpack handles for tensor ops to feed or fetch
         self.unpack_handles(handles)
@@ -137,7 +152,7 @@ class VAE():
         """Get the correct tf.contrib.layer method and parameters from the architecure list"""
         hidden_layers = []
         hidden_params = []
-        layer_names = [str(architecture[0])]
+        layer_names = ['in-{}x{}'.format(*self.img_dims)]
         for n, layer in enumerate(architecture[1:-1]):
             if isinstance(layer, int):
                 # fully connected layer
@@ -207,7 +222,7 @@ class VAE():
                 raise ValueError("architecure[{}]={} not understood. "
                                  "Has to be int (Dense) or tuple (Convolutional).".format(n+1, layer))
 
-        layer_names.append(str(architecture[-1]))
+        layer_names.append('lat-{}'.format(architecture[-1]))
         model_name = '_'.join(layer_names)
         model_name = 'beta-{}_{}'.format(self.beta, model_name)
         return model_name, hidden_layers, hidden_params
@@ -217,12 +232,22 @@ class VAE():
         """Extract architecture (as would be passed to self.__init__()) from model name string"""
         architecture = []
         beta = None
+        img_dims = None
         layer_names = model_name.split("_")
         for name in layer_names:
             layer_type, *layer_params = name.split('-')
             if layer_type == 'beta':
                 assert len(layer_params) == 1
                 beta = float(layer_params[0])
+            elif layer_type == 'in':
+                assert len(layer_params) == 1
+                img_h, img_w = layer_params[0].split('x')
+                img_dims = tuple([int(img_h), int(img_w)])
+                architecture.append(img_dims[0] * img_dims[1])
+            elif layer_type == 'lat':
+                assert len(layer_params) == 1
+                latent_dims = int(layer_params[0])
+                architecture.append(latent_dims)
             elif layer_type == 'fc':
                 assert len(layer_params) == 1
                 num_outputs = int(layer_params[0])
@@ -237,13 +262,13 @@ class VAE():
                 padding = 'SAME' if padding == 'S' else 'VALID'
                 architecture.append([num_filters, filter_shape, stride, padding])
             elif len(layer_params) == 0:
-                # old naming without fc- / conv- but only int (fully connected)
+                # old naming without fc- / conv- / in- / lat- but only int (fully connected)
                 num_outputs = int(layer_type)
                 architecture.append(num_outputs)
             else:
                 raise ValueError("Couldn't split model name {} into architecture."
                                  "".format(model_name))
-        return architecture, beta
+        return architecture, beta, img_dims
 
 
     @property
@@ -484,19 +509,19 @@ class VAE():
         else:
             emb = mus
 
-        self.embedding_vars = []
+        embedding_vars = []
         if latent_space:
             emb_var_latent = tf.Variable(emb,
                                          name=('embedding_latent_sampled' if sample_latent
                                                else 'embedding_latent'),
                                          trainable=False)
-            self.embedding_vars.append(emb_var_latent)
+            embedding_vars.append(emb_var_latent)
         if input_space:
             emb_var_input = tf.Variable(dataset.reshape([-1, 28*28]), name='embedding_x_input', trainable=False)
-            self.embedding_vars.append(emb_var_input)
+            embedding_vars.append(emb_var_input)
 
         # since we create the embedding after training, we need to initialize the vars
-        self.sesh.run(tf.variables_initializer(self.embedding_vars))
+        self.sesh.run(tf.variables_initializer(embedding_vars))
 
         # we need two configs for the train and validation log folders
         # (otherwise outmatic metadata loading won't work)

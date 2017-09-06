@@ -122,7 +122,9 @@ model_name = os.path.dirname(model_name)
 model_name = os.path.basename(model_name)
 # get model architecture
 prefix, model_name = model_name.split("_vae_")
-arch_from_name, beta_from_name = VAE.get_architecture_from_model_name(model_name)
+arch_from_name, beta_from_name, img_dim_from_name = VAE.get_architecture_from_model_name(model_name)
+
+# TODO do we want img dims as cluster column?
 
 if args.beta[0] is None:
     beta = beta_from_name

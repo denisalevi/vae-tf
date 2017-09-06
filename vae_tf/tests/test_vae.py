@@ -3,11 +3,12 @@ import sys
 import shutil
 
 import numpy as np
+from numpy.testing import assert_raises
 import tensorflow as tf
 from nose.tools import with_setup
 
 from vae_tf import plot
-from vae_tf.utils import get_mnist
+from vae_tf.mnist_helpers import get_mnist
 from vae_tf.vae import VAE
 
 # turn off tensorflow logging
@@ -92,16 +93,17 @@ def test_architecture_model_naming_and_reloading():
         [5, (5,5)],
         10  # if removed, remove [1:] in loop below
     ]
-    myvae = VAE(arch, init=False)
+    assert_raises(ValueError, VAE, arch, init=False, d_hyperparams={'img_dims': (28, 27)})
+    myvae = VAE(arch, init=False, d_hyperparams={'img_dims': (28, 28)})
     model_name, *_ = myvae.get_new_layer_architecture(arch)
     split = model_name.split('_')
     for name in split[2:-1]:
         assert name == 'conv-5x5x5-1x1-S', 'unexpected name {}'.format(name)
     assert split[0] == 'beta-1.0', split[1]  # default value
-    assert split[1] == '784', split[0]
-    assert split[-1] == '10', split[-1]
+    assert split[1] == 'in-28x28', split[0]
+    assert split[-1] == 'lat-10', split[-1]
 
-    arch_reload, beta_reload = myvae.get_architecture_from_model_name(model_name)
+    arch_reload, beta_reload, dims_reload = myvae.get_architecture_from_model_name(model_name)
     for layer in arch_reload[1:-1]:
         assert layer[0] == 5, layer[0]
         assert layer[1] == (5, 5), layer[1]
@@ -110,19 +112,22 @@ def test_architecture_model_naming_and_reloading():
     assert arch_reload[0] == 784, arch_reload[0]
     assert arch_reload[-1] == 10, arch_reload[-1]
     assert beta_reload == 1.0
+    assert dims_reload == (28, 28)
 
-    myvae2 = VAE(arch, init=False, d_hyperparams={'beta': 0.5})
+    myvae2 = VAE(arch, init=False, d_hyperparams={'beta': 0.5, 'img_dims': (28, 28)})
     arch2 = [784, 500, 10]
     model_name2, *_ = myvae2.get_new_layer_architecture(arch2)
-    assert model_name2 == 'beta-0.5_784_fc-500_10', model_name2
-    arch_reload2, beta_reload2 = myvae.get_architecture_from_model_name(model_name2)
+    assert model_name2 == 'beta-0.5_in-28x28_fc-500_lat-10', model_name2
+    arch_reload2, beta_reload2, dims_reload2 = myvae.get_architecture_from_model_name(model_name2)
     assert arch_reload2[1] == 500
     assert beta_reload2 == 0.5
+    assert dims_reload2 == (28, 28)
 
     model_name3 = '784_fc-500_10'  # old naming convention
-    arch_reload3, beta_reload3 = myvae.get_architecture_from_model_name(model_name3)
+    arch_reload3, beta_reload3, dims_reload3 = myvae.get_architecture_from_model_name(model_name3)
     assert arch_reload3[1] == 500
     assert beta_reload3 is None
+    assert dims_reload3 is None
 
 if __name__ == '__main__':
     test_architecture_model_naming_and_reloading()
