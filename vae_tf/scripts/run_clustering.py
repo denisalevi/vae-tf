@@ -321,7 +321,7 @@ with tf.variable_scope('latent_space'):
     centroid_idx = np.random.randint(0, args.num_clusters)
     amplitude = 5
     print('Morphing around single latent dimensions of cluster centroid {} from clustering {}'
-          .format(cluster_idx, cluster_name))
+          .format(centroid_idx, cluster_name))
     explore_latent_space_dimensions(vae, amplitude, n=9,
                                     origin=cluster_result.cluster_centroids[centroid_idx],
                                     name='explore_latent_dims_{}_centroid-{}_amp-{}'.format(
