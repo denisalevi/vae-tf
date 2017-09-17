@@ -11,7 +11,7 @@ import tensorflow as tf
 from vae_tf import plot
 from vae_tf.vae import VAE
 from vae_tf.mnist_helpers import load_mnist, get_mnist
-from vae_tf.utils import fc_or_conv_arg
+from vae_tf.utils import fc_or_conv_arg, random_subset
 
 # TODO either check if tf_cnnvis is installed or add to package requirements
 from tf_cnnvis import activation_visualization, deconv_visualization, deepdream_visualization
@@ -79,7 +79,7 @@ def all_plots(model, mnist):
     interpolate_digits(model, mnist)
 
     print("Plotting end-to-end reconstructions...")
-    plot_all_end_to_end(model, mnist)
+    plot.plot_reconstructions(model, mnist)
 
     print("Morphing...")
     morph_numbers(model, mnist, ns=[9,8,7,6,5,4,3,2,1,0])
@@ -101,24 +101,6 @@ def interpolate_digits(model, mnist):
     mus, _ = model.encode(np.stack([imgs[i] for i in idxs], axis=0))
     plot.interpolate(model, *mus, name="interpolate_{}->{}".format(
         *(labels[i] for i in idxs)), outdir=model.png_dir)
-
-def plot_all_end_to_end(model, mnist, tf_summary=True, save_png=None,
-                        show_plot=False, datasets=['train', 'validation']):
-    names = tuple(datasets)
-    datasets = tuple([getattr(mnist, name) for name in names])
-    with tf.variable_scope('reconstructions'):
-        for name, dataset in zip(names, datasets):
-            print('endo to end name', name)
-            x, _ = dataset.next_batch(10)
-            x_reconstructed = model.vae(x)
-            if tf_summary:
-                if name == 'train':
-                    tf_summary = model.train_writer_dir
-                elif name == 'validation':
-                    tf_summary = model.validation_writer_dir
-            plot.plotSubset(model, x, x_reconstructed, n=10, name=name,
-                            tf_summary=tf_summary, save_png=save_png,
-                            show_plot=show_plot), 
 
 def morph_numbers(model, mnist, ns=None, n_per_morph=10):
     if not ns:
@@ -204,9 +186,10 @@ if __name__ == "__main__":
         args.no_plots = True
     else:  # train
         model = VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
-        model.train(mnist, max_iter=MAX_ITER, max_epochs=MAX_EPOCHS, cross_validate_every_n=2000,
-                verbose=True, save_final_state=True, plots_outdir=None,
-                plot_latent_over_time=False, plot_subsets_every_n=None, save_summaries_every_n=100)
+        model.train(mnist.train.images, validation_dataset=mnist.validation.images,
+                    max_iter=MAX_ITER, max_epochs=MAX_EPOCHS, cross_validate_every_n=2000,
+                    verbose=True, save_final_state=True, plots_outdir=None,
+                    plot_latent_over_time=False, plot_subsets_every_n=None, save_summaries_every_n=100)
         if args.create_embedding:
             subset_size = 1000
             subset_images, subset_labels = random_subset(mnist.test.images, subset_size,
@@ -242,24 +225,25 @@ if __name__ == "__main__":
 
         for digit in VISUALIZE_DIGITS:
             x_in = np.expand_dims(get_mnist(digit, mnist, dataset='test'), 0)
+            dataset_handle = model.dataset_handle_from_tensors(x_in)
 
-            if ACTIVATION_VISUALIZATION:
-                activation_visualization(graph_or_path=meta_graph_file,
-                                         value_feed_dict={model.x_in: x_in},
-                                         layers=conv_layers+deconv_layers,#['c'],
-                                         path_logdir=model.validation_writer_dir,
-                                         path_outdir=CNNVIS_OUTDIR,
-                                         name_suffix=str(digit))
-            if DECONV_VISUALIZATION:
-                deconv_visualization(graph_or_path=meta_graph_file,
-                                     value_feed_dict={model.x_in: x_in},
-                                     layers=conv_layers,#['c'],
-                                     path_logdir=model.validation_writer_dir,
-                                     path_outdir=CNNVIS_OUTDIR,
-                                     name_suffix=str(digit))
+           # if ACTIVATION_VISUALIZATION:
+           #     activation_visualization(graph_or_path=meta_graph_file,
+           #                              value_feed_dict={model.dataset_in: dataset_handle},
+           #                              layers=conv_layers+deconv_layers,#['c'],
+           #                              path_logdir=model.validation_writer_dir,
+           #                              path_outdir=CNNVIS_OUTDIR,
+           #                              name_suffix=str(digit))
+           # if DECONV_VISUALIZATION:
+           #     deconv_visualization(graph_or_path=meta_graph_file,
+           #                          value_feed_dict={model.dataset_in: dataset_handle},
+           #                          layers=conv_layers,#['c'],
+           #                          path_logdir=model.validation_writer_dir,
+           #                          path_outdir=CNNVIS_OUTDIR,
+           #                          name_suffix=str(digit))
 
-    # default plot=False, no_plot=False --> plot_all_end_to_end()
+    # default plot=False, no_plot=False --> plot.plot_reconstructions()
     if args.plot_all:
         all_plots(model, mnist)
     elif not args.no_plots:
-        plot_all_end_to_end(model, mnist, tf_summary=True, save_png=args.save_pngs)
+        plot.plot_reconstructions(model, mnist, tf_summary=True, save_png=args.save_pngs)

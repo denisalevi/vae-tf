@@ -380,9 +380,20 @@ class VAE():
         return decoder
 
     def _buildGraph(self):
-        x_in = tf.placeholder(tf.float32, shape=[None, # enables variable batch size
-                                                 *self.img_dims, 1], name="x")
+
         dropout = tf.placeholder_with_default(1., shape=[], name="dropout")
+
+        with tf.variable_scope("input_data"):
+            # handle for a Dataset (tensorflow 1.2+ Dataset API) object
+            # to switch btwn train and validation datasets
+            dataset_in = tf.placeholder(tf.string, shape=[], name='dataset_handle')
+
+            # the Iterator class iterates over the Dataset
+            iterator = tf.contrib.data.Iterator.from_string_handle(
+                dataset_in, output_types=tf.float32, output_shapes=[None, *self.img_dims, 1]
+            )
+            x_in = iterator.get_next(name='x')
+            x_in = tf.reshape(x_in, [-1, *self.img_dims, 1])
 
         # encoding / "recognition": q(z|x)
         with tf.variable_scope("encoding"):
@@ -460,14 +471,14 @@ class VAE():
             if var.name.endswith(('weights:0', 'biases:0')):
                 variable_summaries(var)
 
-        return (x_in, dropout, z_mean, z_log_sigma, x_reconstructed,
+        return (dataset_in, dropout, z_mean, z_log_sigma, x_reconstructed,
                 z_in, x_decoded, cost, global_step, train_op)
 
     def unpack_handles(self, handles):
         """Assignes the operations returned from _build_graph() to class attributes. These must include:
         (x_in, x_decoded, x_reconstructed, z_mean, z_log_sigma, z_in, global_step, dropout_, cost, train_op)
         """
-        (self.x_in, self.dropout_, self.z_mean, self.z_log_sigma,
+        (self.dataset_in, self.dropout_, self.z_mean, self.z_log_sigma,
          self.x_reconstructed, self.z_in, self.x_decoded,
          self.cost, self.global_step, self.train_op) = handles
 
@@ -613,12 +624,34 @@ class VAE():
             return -0.5 * tf.reduce_sum(1 + 2 * log_sigma - mu**2 -
                                         tf.exp(2 * log_sigma), 1)
 
+    def dataset_handle_from_tensors(self, x):
+        '''Return string handle for one shot Iterator over Dataset created from Tensor x
+        '''
+        assert x.ndim == 4
+        dataset = tf.contrib.data.Dataset.from_tensor_slices(x)
+        # batch all tensors together
+        dataset = dataset.batch(x.shape[0])
+        # create Dataset handle to pass as feed_dict
+        iterator = dataset.make_one_shot_iterator()
+        handle = self.sesh.run(iterator.string_handle())
+        return handle
+
     def encode(self, x):
         """Probabilistic encoder from inputs to latent distribution parameters;
         a.k.a. inference network q(z|x)
         """
-        # np.array -> [float, float]
-        feed_dict = {self.x_in: x}
+        if isinstance(x, tf.contrib.data.Dataset):
+            iterator = x.make_one_shot_iterator()
+            handle = self.sesh.run(iterator.string_handle())
+        elif isinstance(x, np.ndarray):
+            # create Dataset from given tensors
+            # NOTE: if we run out of Graph memory here, use a placeholder for x
+            #       and run iterator initializer with x as feed dict
+            handle = self.dataset_handle_from_tensors(x)
+        else:
+            raise TypeError('`x` must be np.ndarray or tf.contrib.data.Dataset, got {}'
+                            .format(type(x).__name__))
+        feed_dict = {self.dataset_in: handle}
         return self.sesh.run([self.z_mean, self.z_log_sigma], feed_dict=feed_dict)
 
     def decode(self, zs=None):
@@ -639,14 +672,50 @@ class VAE():
         # np.array -> np.array
         return self.decode(self.sampleGaussian(*self.encode(x)))
 
-    def train(self, X, max_iter=np.inf, max_epochs=np.inf, cross_validate_every_n=None,
+    def train(self, train_dataset, max_iter=np.inf, max_epochs=None,
+              cross_validate_every_n=None, validation_dataset=None, 
               verbose=True, save_final_state=True, plots_outdir=None,
               plot_latent_over_time=False, plot_subsets_every_n=None,
-              save_summaries_every_n=None, **kwargs):
+              save_summaries_every_n=None, shuffle=None, **kwargs):
         if 'save' in kwargs.keys():
             raise TypeError("The `save` keyword was renamed to `save_final_state`!")
         elif kwargs:
             raise TypeError("train() got an unexpected keyword argument: {}".format(list(kwargs.keys())[0]))
+
+        if cross_validate_every_n is not None and validation_dataset is None:
+            raise ValueError("Need `validation_dataset` for cross validation.")
+        
+        dataset_handles = {}
+        iterators = {}
+        for dataset, name in [(train_dataset, 'train'), (validation_dataset, 'validation')]:
+            if name is 'train' or dataset is not None:
+                if isinstance(dataset, np.ndarray):
+                    dataset = tf.contrib.data.Dataset.from_tensor_slices(dataset)
+                elif not isinstance(dataset, tf.contrib.data.Dataset):
+                    raise TypeError('`{}_dataset` needs to be a np.ndarray or '
+                                    'tf.contrib.data.Dataset, got {}'
+                                    .format(name, type(dataset).__name__))
+
+                dataset = dataset.batch(self.batch_size)
+                if name == 'validation':
+                    # we want to count epochs in train dataset (catch OutOfRangeError)
+                    # for validation we can just repeat the epochs without signal
+                    dataset = dataset.repeat()
+
+                if shuffle is not None and name == 'test':
+                    dataset = dataset.shuffle(shuffle)
+                # TODO: if we wan't to shuffle at each epoch, add dataset.shuffle() 
+                #       If added BEFORE dataset.repeat(), it will finish the data
+                #       from one epoch before starting the next one.
+                #       If added AFTER, if data from next epochs might come before
+                #       first epoch is finished.
+                # https://stackoverflow.com/questions/44132307/tf-contrib-data-dataset-repeat-with-shuffle-notice-epoch-end-mixed-epochs
+
+                iterator = dataset.make_initializable_iterator()
+                iterators[name] = iterator
+
+                handle, _ = self.sesh.run([iterator.string_handle(), iterator.initializer])
+                dataset_handles[name] = handle
 
         if plots_outdir is None:
             plots_outdir = self.png_dir
@@ -664,75 +733,86 @@ class VAE():
 
             i_since_last_print = 0
             err_train = 0
+            epochs_completed = 0
+            start = time.time()
             while True:
-                x, _ = X.train.next_batch(self.batch_size)
-                feed_dict = {self.x_in: x, self.dropout_: self.dropout}
+                # try except to catch tf.errors.OutOfRangeError at end of epoch
+                try:
+                    feed_dict = {self.dataset_in: dataset_handles['train'],
+                                 self.dropout_: self.dropout}
 
-                ### TRAINING
-                if save_summaries_every_n is not None and i_batch % save_summaries_every_n == 0:
-                    # save a summary checkpoint
-                    fetches = [self.merged_summaries, self.x_reconstructed, self.cost,
-                               self.global_step, self.train_op]
-                    summary, x_reconstructed, cost, i_batch, _ = self.sesh.run(fetches, feed_dict)
-                    self.train_writer.add_summary(summary, i_batch)
-                else:  # no summary
-                    fetches = [self.x_reconstructed, self.cost, self.global_step, self.train_op]
-                    x_reconstructed, cost, i_batch, _ = self.sesh.run(fetches, feed_dict)
-                # TODO why calculate average cost? isn't current cost much more informative?
-                err_train += cost
-                i_since_last_print += 1
-                avg_cost = err_train / i_since_last_print
-                if verbose and i_batch % 1000 == 0:
-                    # print average cost since last print
-                    print("batch {} (epoch {}) --> cost (avg since last report): {}"
-                          "".format(i_batch, X.train.epochs_completed, avg_cost))
-                    i_since_last_print = 0
-                    err_train = 0
+                    ### TRAINING
+                    if save_summaries_every_n is not None and i_batch % save_summaries_every_n == 0:
+                        # save a summary checkpoint
+                        fetches = [self.merged_summaries, self.x_reconstructed, self.cost,
+                                   self.global_step, self.train_op]
+                        summary, x_reconstructed, cost, i_batch, _ = self.sesh.run(fetches, feed_dict)
+                        self.train_writer.add_summary(summary, i_batch)
+                    else:  # no summary
+                        fetches = [self.x_reconstructed, self.cost, self.global_step, self.train_op]
+                        x_reconstructed, cost, i_batch, _ = self.sesh.run(fetches, feed_dict)
+                    # TODO why calculate average cost? isn't current cost much more informative?
+                    err_train += cost
+                    i_since_last_print += 1
+                    avg_cost = err_train / i_since_last_print
+                    if verbose and i_batch % 1000 == 0:
+                        # print average cost since last print
+                        print("batch {} (epoch {}) --> cost (avg since last report): {} (took {:.2f}s)"
+                              "".format(i_batch, epochs_completed, avg_cost, time.time() - start))
+                        i_since_last_print = 0
+                        err_train = 0
+                        start = time.time()
 
-                ### VALIDATION
-                if cross_validate_every_n is not None and i_batch % cross_validate_every_n == 0:
-                    # TODO change validation batch num / size / intervall if data less equal distributed
-                    num_batches_validation = 1
-                    validation_cost = 0
-                    for n in range(num_batches_validation):
-                        x, _ = X.validation.next_batch(self.batch_size)
-                        feed_dict = {self.x_in: x}
-                        fetches = [self.merged_summaries, self.x_reconstructed, self.cost]
-                        summary, x_reconstructed, cost = self.sesh.run(fetches, feed_dict)
-                        validation_cost += cost
-                    validation_cost /= num_batches_validation
-                    self.validation_writer.add_summary(summary, i_batch)
-                    if verbose:
-                        print("batch {} --> validation cost: {}".format(i_batch, validation_cost))
-                    if plot_subsets_every_n is not None:
-                        name = "reconstruction_cross_validation_step{}".format(self.step)
+                    ### VALIDATION
+                    if cross_validate_every_n is not None and i_batch % cross_validate_every_n == 0:
+                        # TODO change validation batch num / size / intervall if data less equal distributed
+                        num_batches_validation = 1
+                        validation_cost = 0
+                        for n in range(num_batches_validation):
+                            feed_dict = {self.dataset_in: dataset_handles['validation']}
+                            fetches = [self.merged_summaries, self.x_reconstructed, self.cost]
+                            summary, x_reconstructed, cost = self.sesh.run(fetches, feed_dict)
+                            validation_cost += cost
+                        validation_cost /= num_batches_validation
+                        self.validation_writer.add_summary(summary, i_batch)
+                        if verbose:
+                            print("batch {} --> validation cost: {}".format(i_batch, validation_cost))
+                        if plot_subsets_every_n is not None:
+                            name = "reconstruction_cross_validation_step{}".format(self.step)
+                            plot.plotSubset(self, x, x_reconstructed, n=10, name=name,
+                                            save_png=plots_outdir)
+
+                    ### PLOTTING
+                    if plot_subsets_every_n is not None and i_batch % plot_subsets_every_n == 0:
+                        # visualize `n` examples of current minibatch inputs + reconstructions
+                        name = "reconstruction_train_step{}".format(self.step)
                         plot.plotSubset(self, x, x_reconstructed, n=10, name=name,
                                         save_png=plots_outdir)
+                    if plot_latent_over_time:
+                        while int(round(BASE**pow_)) == i_batch:  # logarithmic time
+                            plot.exploreLatent(self, nx=30, ny=30, ppf=True, outdir=plots_outdir,
+                                               name="explore_ppf30_{}".format(pow_))
 
-                ### PLOTTING
-                if plot_subsets_every_n is not None and i_batch % plot_subsets_every_n == 0:
-                    # visualize `n` examples of current minibatch inputs + reconstructions
-                    name = "reconstruction_train_step{}".format(self.step)
-                    plot.plotSubset(self, x, x_reconstructed, n=10, name=name,
-                                    save_png=plots_outdir)
-                if plot_latent_over_time:
-                    while int(round(BASE**pow_)) == i_batch:  # logarithmic time
-                        plot.exploreLatent(self, nx=30, ny=30, ppf=True, outdir=plots_outdir,
-                                           name="explore_ppf30_{}".format(pow_))
+                            names = ("train", "validation")
+                            datasets = (train_dataset, validation_dataset)
+                            for name, dataset in zip(names, datasets):
+                                if datasets is not None:
+                                    # TODO add labels argument to train method
+                                    plot.plotInLatent(self, dataset, labels=[], range=(-6, 6),
+                                                      title=name, outdir=plots_outdir,
+                                                      name="{}_{}".format(name, pow_))
 
-                        names = ("train", "validation", "test")
-                        datasets = (X.train, X.validation, X.test)
-                        for name, dataset in zip(names, datasets):
-                            plot.plotInLatent(self, dataset.images, dataset.labels, range_=
-                                              (-6, 6), title=name, outdir=plots_outdir,
-                                              name="{}_{}".format(name, pow_))
+                            print("{}^{} = {}".format(BASE, pow_, i_batch))
+                            pow_ += INCREMENT
 
-                        print("{}^{} = {}".format(BASE, pow_, i_batch))
-                        pow_ += INCREMENT
+                    if i_batch >= max_iter or epochs_completed >= max_epochs:
+                        print("... training finished!")
+                        break
 
-                if i_batch >= max_iter or X.train.epochs_completed >= max_epochs:
-                    print("... training finished!")
-                    break
+                except tf.errors.OutOfRangeError:
+                    epochs_completed += 1
+                    # reinitialize train iterator
+                    self.sesh.run(iterators['train'].initializer)
 
         except KeyboardInterrupt:
             print("\n... training interrupted!")
@@ -743,7 +823,7 @@ class VAE():
 
         finally:
             print("final cost (@ step {} = epoch {}): {}".format(
-                i_batch, X.train.epochs_completed, avg_cost))
+                i_batch, epochs_completed, avg_cost))
             now = datetime.now().isoformat()[11:]
 
             if save_final_state:
