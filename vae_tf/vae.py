@@ -3,6 +3,7 @@ import os
 import re
 import sys
 import scipy
+import time
 
 import numpy as np
 import tensorflow as tf
@@ -10,7 +11,7 @@ from tensorflow.contrib.tensorboard.plugins import projector
 from tensorflow.contrib import layers
 
 from vae_tf import plot
-from vae_tf.utils import print_, images_to_sprite, variable_summaries, get_deconv_params
+from vae_tf.utils import print_, images_to_sprite, variable_summaries, get_deconv_params, convert_into_grid
 
 
 class VAE():
@@ -31,11 +32,13 @@ class VAE():
         "img_dims": (28, 28),
         "weights_initializer": layers.xavier_initializer(),
         "biases_initializer": tf.zeros_initializer(),
+        "reconstruction_loss": "crossEntropy",  # has to be a class method
+        "data_range": (0, 1)
     }
     RESTORE_KEY = "to_restore"
 
     def __init__(self, architecture=[], d_hyperparams={}, meta_graph=None,
-                 log_dir="./log", init=True):
+                 log_dir="./log", init=True, graph=None):
         """(Re)build a symmetric VAE model with given:
 
             * architecture (list of nodes per encoder layer); e.g.
@@ -62,7 +65,7 @@ class VAE():
             # for faster testing
             return
 
-        self.sesh = tf.Session()
+        self.sesh = tf.Session(graph=graph)
 
         if not meta_graph: # new model
             self.architecture = architecture
@@ -382,6 +385,7 @@ class VAE():
     def _buildGraph(self):
 
         dropout = tf.placeholder_with_default(1., shape=[], name="dropout")
+        learning_rate = tf.placeholder(tf.float32, shape=[], name="learning_rate")
 
         with tf.variable_scope("input_data"):
             # handle for a Dataset (tensorflow 1.2+ Dataset API) object
@@ -393,6 +397,8 @@ class VAE():
                 dataset_in, output_types=tf.float32, output_shapes=[None, *self.img_dims, 1]
             )
             x_in = iterator.get_next(name='x')
+            if isinstance(x_in, tuple):
+                x_in = x_in[0]
             x_in = tf.reshape(x_in, [-1, *self.img_dims, 1])
 
         # encoding / "recognition": q(z|x)
@@ -404,6 +410,8 @@ class VAE():
             with tf.variable_scope("z_mean"):
                 z_mean = layers.fully_connected(
                     inputs=h_encoded,
+                    #activation_fn=tf.nn.relu,
+                    #activation_fn=tf.nn.sigmoid,#None,
                     activation_fn=None,
                     # TODO have self.latent_space_dim as variables instead
                     num_outputs=self.architecture[-1])
@@ -411,6 +419,8 @@ class VAE():
             with tf.variable_scope("z_log_sigma"):
                 z_log_sigma = layers.fully_connected(
                     inputs=h_encoded,
+                    #activation_fn=tf.nn.relu,
+                    #activation_fn=tf.nn.sigmoid,#None,
                     activation_fn=None,
                     num_outputs=self.architecture[-1])
                 z_log_sigma = tf.nn.dropout(z_log_sigma, dropout)
@@ -433,7 +443,8 @@ class VAE():
             # binary cross-entropy -- assumes x & p(x|z) are iid Bernoullis
             x_reconstructed_flat = layers.flatten(x_reconstructed)
             x_in_flat = layers.flatten(x_in)
-            rec_loss = tf.reduce_mean(VAE.crossEntropy(x_reconstructed_flat, x_in_flat))
+            reconstruction_loss_function = getattr(self, self.reconstruction_loss)
+            rec_loss = tf.reduce_mean(reconstruction_loss_function(x_reconstructed_flat, x_in_flat))
             tf.summary.scalar('reconstruction_loss', rec_loss)
 
             # Kullback-Leibler divergence: mismatch b/w approximate vs. imposed/true posterior
@@ -442,6 +453,8 @@ class VAE():
 
             # average over minibatch
             cost = tf.add(rec_loss, self.beta * kl_loss)
+            #cost = rec_loss
+            #cost = kl_loss
             tf.summary.scalar('vae_cost', cost)
             cost += l2_reg
             tf.summary.scalar('regularized_cost', cost)
@@ -449,11 +462,11 @@ class VAE():
         # optimization
         global_step = tf.Variable(0, trainable=False)
         with tf.name_scope("Adam_optimizer"):
-            optimizer = tf.train.AdamOptimizer(self.learning_rate)
+            optimizer = tf.train.AdamOptimizer(learning_rate)
             tvars = tf.trainable_variables()
             grads_and_vars = optimizer.compute_gradients(cost, tvars)
             clipped = [(tf.clip_by_value(grad, -5, 5), tvar) # gradient clipping
-                       for grad, tvar in grads_and_vars]
+                       for grad, tvar in grads_and_vars if grad is not None]
             train_op = optimizer.apply_gradients(clipped, global_step=global_step,
                                                  name="minimize_cost")
 
@@ -471,16 +484,16 @@ class VAE():
             if var.name.endswith(('weights:0', 'biases:0')):
                 variable_summaries(var)
 
-        return (dataset_in, dropout, z_mean, z_log_sigma, x_reconstructed,
-                z_in, x_decoded, cost, global_step, train_op)
+        return (dataset_in, x_in, dropout, z_mean, z_log_sigma, x_reconstructed,
+                z_in, x_decoded, cost, global_step, train_op, learning_rate)
 
     def unpack_handles(self, handles):
         """Assignes the operations returned from _build_graph() to class attributes. These must include:
-        (x_in, x_decoded, x_reconstructed, z_mean, z_log_sigma, z_in, global_step, dropout_, cost, train_op)
+        (dataset_in, x_in, x_decoded, x_reconstructed, z_mean, z_log_sigma, z_in, global_step, dropout_, cost, train_op)
         """
-        (self.dataset_in, self.dropout_, self.z_mean, self.z_log_sigma,
+        (self.dataset_in, self.x_in, self.dropout_, self.z_mean, self.z_log_sigma,
          self.x_reconstructed, self.z_in, self.x_decoded,
-         self.cost, self.global_step, self.train_op) = handles
+         self.cost, self.global_step, self.train_op, self.learning_rate_) = handles
 
     def sampleGaussian(self, mu, log_sigma, seed=None):
         """(Differentiably!) draw sample from Gaussian with given shape,
@@ -497,10 +510,11 @@ class VAE():
 
     def create_embedding(self, dataset, labels=None, label_names=None,
                          sample_latent=False, latent_space=True, input_space=True,
-                         create_sprite=True):
+                         create_sprite=True, invert_sprite=True):
         """dataset.shape = (num_items, item_dimension)
         labels.shape = (num_items, num_labels)
         label_names = list
+        create_sprite: bool or collable that takes 4D data and returns 4D pixle files
         """
 
         if labels is not None:
@@ -511,7 +525,8 @@ class VAE():
                   "and latent_space=False. No embedding created.")
             return
 
-        dataset = dataset.reshape([-1, 28, 28, 1])
+        #assert dataset.ndim == 4
+        dataset = dataset.reshape([-1, *self.img_dims, 1])
 
         # encode dataset
         mus, sigmas = self.encode(dataset)
@@ -528,17 +543,40 @@ class VAE():
                                          trainable=False)
             embedding_vars.append(emb_var_latent)
         if input_space:
-            emb_var_input = tf.Variable(dataset.reshape([-1, 28*28]), name='embedding_x_input', trainable=False)
+            emb_var_input = tf.Variable(dataset.reshape([-1, self.img_dims[0] * self.img_dims[1]]),
+                                        name='embedding_x_input', trainable=False)
             embedding_vars.append(emb_var_input)
 
         # since we create the embedding after training, we need to initialize the vars
         self.sesh.run(tf.variables_initializer(embedding_vars))
+
 
         # we need two configs for the train and validation log folders
         # (otherwise outmatic metadata loading won't work)
         # Format: tensorflow/contrib/tensorboard/plugins/projector/projector_config.proto
         log_dirs = [self.train_writer_dir, self.validation_writer_dir]
         configs = [projector.ProjectorConfig() for _ in range(len(log_dirs))]
+
+        if create_sprite:
+            # create sprite image
+            if callable(create_sprite):
+                dataset = create_sprite(dataset.reshape((-1, *self.img_dims, 1)))
+                sprite_single_img_dims = dataset.shape[1:3]
+            else:
+                sprite_single_img_dims = self.img_dims 
+            print('single sprite img dims', sprite_single_img_dims)
+            # reshape images into (N, width, height)
+            #embedding_images = dataset.reshape((-1, *self.img_dims))
+            #embedding_images = np.tile(dataset, (1,1,1,3))
+            #sprite_image = images_to_sprite(embedding_images, invert=invert_sprite)
+            sprite_image = convert_into_grid(dataset, padding=0, normalize=True)#invert=invert_sprite)
+            assert sprite_image.shape[0] <= 8192 and sprite_image.shape[1] <= 8192,\
+                    'sprite image too large, got {} px'.format(sprite_images.shape[:2])
+            if invert_sprite:
+                sprite_image = 1 - sprite_image
+            if sprite_image.shape[-1] == 1:
+                # repeate last dimensions 3 times (gray scale) for imsave
+                sprite_image = np.tile(sprite_image, 3)
 
         for config, log_dir in zip(configs, log_dirs):
             if latent_space:
@@ -554,6 +592,7 @@ class VAE():
                 if labels.ndim > 1:
                     if label_names is None:
                         label_names = ['label{}'.format(n) for n in range(labels.shape[1])]
+
                     err_msg = "label_names has to be of same length as there are columns in labels (got {} and {})"
                     assert len(label_names) == labels.shape[1], err_msg.format(len(label_names),
                                                                                labels.shape[1])
@@ -568,18 +607,14 @@ class VAE():
                     embedding_input.metadata_path = metadata_file
 
             if create_sprite:
-                # create sprite image
-                # reshape images into (N, width, height)
-                embedding_images = dataset.reshape((-1, *self.img_dims))
-                sprite_image = images_to_sprite(embedding_images, invert=True)
                 sprite_file = os.path.join(log_dir, 'sprite_img.png')
                 scipy.misc.imsave(sprite_file, sprite_image)
                 if latent_space:
                     embedding_latent.sprite.image_path = sprite_file
-                    embedding_latent.sprite.single_image_dim.extend(list(self.img_dims))
+                    embedding_latent.sprite.single_image_dim.extend(list(sprite_single_img_dims))
                 if input_space:
                     embedding_input.sprite.image_path = sprite_file
-                    embedding_input.sprite.single_image_dim.extend(list(self.img_dims))
+                    embedding_input.sprite.single_image_dim.extend(list(sprite_single_img_dims))
 
             # The next line writes a projector_config.pbtxt in the projector_dir. TensorBoard will
             # read this file during startup.
@@ -589,17 +624,81 @@ class VAE():
         self.save_checkpoint()
         print("Created embeddings")
 
+    def scale_data_to_prob(self, data):
+        '''
+        Scale data to range [0, 1] to interpret values as probabilities.
+        '''
+        data_min, data_max = self.data_range
+        if data.dtype.is_integer:
+            if data.dtype.size < 2:
+                # we have 8 or 16 bit ingegers
+                data = data.as_float(data)
+            elif data.dtype.size == 4:
+                # we have 32 bit integer
+                data = data.as_double(data)
+            else:
+                # we have 64 bit integer
+                print("WARNING: casting 64 bit integer to 64 bit float. If your "
+                      "data contains integers higher then 2^(53), they might "
+                      "be not be representable by 64 bit floats and be rounded "
+                      "to the next represantable number. (e.g. "
+                      "``np.float64(np.int64(2**53 + 1)) == np.float64(np.int64(2**53))``)")
+                data = data.as_double(data)
+        # (data - min) / (max - min)
+        prob = tf.div(tf.subtract(data, data_min), data_max - data_min)
+        #tf.assert_positive(prob, message='data negative after scaling')
+        #tf.assert_less_equal(prob, 1., message='data greater then 1 after scaling')
+        return prob
+
+
     @staticmethod
     def crossEntropy(obs, actual, offset=1e-7):
         # TODO: maybe use tf's cross entropy for stability?
         # see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/examples/tutorials/mnist/mnist_with_summaries.py#L111-L124
         """Binary cross-entropy, per training example"""
         # (tf.Tensor, tf.Tensor, float) -> tf.Tensor
+        epsilon = 1e-10
         with tf.name_scope("cross_entropy"):
             # bound by clipping to avoid nan
             obs_ = tf.clip_by_value(obs, offset, 1 - offset)
-            return -tf.reduce_sum(actual * tf.log(obs_) +
-                                  (1 - actual) * tf.log(1 - obs_), 1)
+            return -tf.reduce_sum(actual * tf.log(obs_ + epsilon) +
+                                  (1 - actual) * tf.log(1 - obs_ + epsilon), 1)
+
+    @staticmethod
+    def crossEntropy2(obs, actual, offset=1e-7):
+        # TODO: maybe use tf's cross entropy for stability?
+        # see https://github.com/tensorflow/tensorflow/blob/master/tensorflow/examples/tutorials/mnist/mnist_with_summaries.py#L111-L124
+        """Binary cross-entropy, per training example"""
+        # (tf.Tensor, tf.Tensor, float) -> tf.Tensor
+        epsilon = 1e-10
+        # log distance reconstruction - decoder
+        obs  = (obs  + 1) / 2
+        actual = (actual + 1) / 2
+        with tf.name_scope("cross_entropy"):
+            # bound by clipping to avoid nan
+            obs_ = tf.clip_by_value(obs, offset, 1 - offset)
+            return -tf.reduce_sum(actual * tf.log(obs_ + epsilon) +
+                                  (1 - actual) * tf.log(1 - obs_ + epsilon), 1)
+
+    def lsd(self, a, b):
+        '''Tensorflow log spectral-distance (works only on GPU)'''
+        def tflog10(x):
+            '''Tensorflow version of a log base 10'''
+            numerator = tf.log(x)
+            denominator = tf.log(tf.constant(10, dtype=numerator.dtype))
+            return numerator / denominator
+        shape = tf.shape(a)
+        #a = tf.reshape(a, (-1, *self.img_dims))
+        #b = tf.reshape(b, (-1, *self.img_dims))
+        psd = lambda x: tf.square(tf.cast(tf.abs(tf.fft(tf.cast(x, tf.complex64))), tf.float32))
+        return tf.sqrt(tf.reduce_mean(tf.square(10*tflog10(psd(a)/psd(b)))))
+    
+    @staticmethod
+    def sqrerr(actual, obs):
+        '''Simple root mean square error'''
+        with tf.name_scope("square_error"):
+            loss_reco = tf.sqrt(tf.reduce_mean(tf.squared_difference(actual, obs)))
+            return loss_reco
 
     @staticmethod
     def l1_loss(obs, actual):
@@ -648,9 +747,14 @@ class VAE():
             # NOTE: if we run out of Graph memory here, use a placeholder for x
             #       and run iterator initializer with x as feed dict
             handle = self.dataset_handle_from_tensors(x)
+        elif isinstance(x, bytes):
+            handle = x
+        elif isinstance(x, tf.Tensor) and x.dtype == tf.string:
+            # assume its an iterator string handle that still has to be run
+            handle = self.sesh.run(x)
         else:
-            raise TypeError('`x` must be np.ndarray or tf.contrib.data.Dataset, got {}'
-                            .format(type(x).__name__))
+            raise TypeError('`x` must be np.ndarray or tf.contrib.data.Dataset or a '
+                            'string handle to it, got {}'.format(type(x).__name__))
         feed_dict = {self.dataset_in: handle}
         return self.sesh.run([self.z_mean, self.z_log_sigma], feed_dict=feed_dict)
 
@@ -691,12 +795,14 @@ class VAE():
             if name is 'train' or dataset is not None:
                 if isinstance(dataset, np.ndarray):
                     dataset = tf.contrib.data.Dataset.from_tensor_slices(dataset)
+                    dataset = dataset.batch(self.batch_size)
                 elif not isinstance(dataset, tf.contrib.data.Dataset):
                     raise TypeError('`{}_dataset` needs to be a np.ndarray or '
                                     'tf.contrib.data.Dataset, got {}'
                                     .format(name, type(dataset).__name__))
+                    
+                # TODO can we check if dataset is batched and batch if not?
 
-                dataset = dataset.batch(self.batch_size)
                 if name == 'validation':
                     # we want to count epochs in train dataset (catch OutOfRangeError)
                     # for validation we can just repeat the epochs without signal
@@ -720,7 +826,7 @@ class VAE():
         if plots_outdir is None:
             plots_outdir = self.png_dir
 
-        i_batch = 0
+        i_batch = self.step
         avg_cost = None
         try:
             now = datetime.now().isoformat()[11:]
@@ -735,11 +841,13 @@ class VAE():
             err_train = 0
             epochs_completed = 0
             start = time.time()
+            print('Using learning rate:', self.learning_rate)
             while True:
                 # try except to catch tf.errors.OutOfRangeError at end of epoch
                 try:
                     feed_dict = {self.dataset_in: dataset_handles['train'],
-                                 self.dropout_: self.dropout}
+                                 self.dropout_: self.dropout,
+                                 self.learning_rate_: self.learning_rate}
 
                     ### TRAINING
                     if save_summaries_every_n is not None and i_batch % save_summaries_every_n == 0:
@@ -755,7 +863,7 @@ class VAE():
                     err_train += cost
                     i_since_last_print += 1
                     avg_cost = err_train / i_since_last_print
-                    if verbose and i_batch % 1000 == 0:
+                    if verbose and i_batch % 100 == 0:
                         # print average cost since last print
                         print("batch {} (epoch {}) --> cost (avg since last report): {} (took {:.2f}s)"
                               "".format(i_batch, epochs_completed, avg_cost, time.time() - start))
@@ -770,8 +878,12 @@ class VAE():
                         validation_cost = 0
                         for n in range(num_batches_validation):
                             feed_dict = {self.dataset_in: dataset_handles['validation']}
-                            fetches = [self.merged_summaries, self.x_reconstructed, self.cost]
-                            summary, x_reconstructed, cost = self.sesh.run(fetches, feed_dict)
+                            if plot_subsets_every_n is None:
+                                fetches = [self.merged_summaries, self.x_reconstructed, self.cost]
+                                summary, x_reconstructed, cost = self.sesh.run(fetches, feed_dict)
+                            else:
+                                fetches = [self.merged_summaries, self.x_reconstructed, self.cost, self.x_in]
+                                summary, x_reconstructed, cost, x_in  = self.sesh.run(fetches, feed_dict)
                             validation_cost += cost
                         validation_cost /= num_batches_validation
                         self.validation_writer.add_summary(summary, i_batch)
@@ -779,7 +891,7 @@ class VAE():
                             print("batch {} --> validation cost: {}".format(i_batch, validation_cost))
                         if plot_subsets_every_n is not None:
                             name = "reconstruction_cross_validation_step{}".format(self.step)
-                            plot.plotSubset(self, x, x_reconstructed, n=10, name=name,
+                            plot.plotSubset(self, x_in, x_reconstructed, n=10, name=name,
                                             save_png=plots_outdir)
 
                     ### PLOTTING

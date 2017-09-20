@@ -1,6 +1,7 @@
 import os
 import itertools
 import fnmatch
+import sys
 
 import matplotlib.patches as mpatches
 import matplotlib.pyplot as plt
@@ -8,13 +9,16 @@ import matplotlib.ticker as ticker
 import numpy as np
 import pandas as pd
 import tensorflow as tf
+import cv2
 
 from scipy.cluster.hierarchy import dendrogram
+from tensorflow.contrib.data.python.ops.dataset_ops import BatchDataset, PaddedBatchDataset
 
-from vae_tf.utils import convert_into_grid
+from vae_tf.utils import convert_into_grid, image_normalization
 
-def plotSubset(model, x_in, x_reconstructed, n=10, cols=None, outlines=True,
-               tf_summary=None, save_png=None, show_plot=False, name="reconstruction"):
+def plotSubset(model, x_in, x_reconstructed, n=10, cols=None, transform_data=None,
+               tf_summary=None, save_png=None, show_plot=False, grid_dims=None,
+               name="reconstruction", transform_kwargs=None):
     """Util to plot subset of inputs and reconstructed outputs"""
     # TODO wtf combing this with end-to-end reconstruction... or check what its used for in vae.py
 
@@ -29,9 +33,55 @@ def plotSubset(model, x_in, x_reconstructed, n=10, cols=None, outlines=True,
             assert isinstance(save_png, bool), '`save_png` needs to be `str` or `bool`'
             save_png = model.png_dir
 
-        all_xs = np.vstack([x_in, x_reconstructed])
-        _create_grid_image(all_xs, name, grid_dims=(2, n), tf_summary=tf_summary,
+        if transform_data is not None:
+            assert callable(transform_data)
+            images_in = []
+            images_reconstructed = []
+            for x in x_in:
+                images_in.append(transform_data(x, **transform_kwargs))
+            for x in x_reconstructed:
+                images_reconstructed.append(transform_data(x, **transform_kwargs))
+            images = np.vstack([images_in, images_reconstructed])
+        else:
+            images = np.vstack([x_in, x_reconstructed])
+
+            print('images shape', images.shape)
+
+        _create_grid_image(images, name, grid_dims=(2, n), tf_summary=tf_summary,
                            model=model, save_png=save_png, show_plot=show_plot)
+
+def plot_reconstructions(model, data, n=10, transform_data=None, tf_summary=True,
+                         save_png=None, show_plot=False, grid_dims=None,
+                         datasets=['train', 'validation'], transform_kwargs=None):
+    names = tuple(datasets)
+    if isinstance(data, dict):
+        datasets = [data[name] for name in datasets]
+    else:  # assume its the old mnist DataSet class
+        datasets = tuple([getattr(data, name) for name in names])
+    with tf.variable_scope('reconstructions'):
+        for name, dataset in zip(names, datasets):
+            if isinstance(data, dict):
+                if isinstance(dataset, (BatchDataset, PaddedBatchDataset)):
+                    dataset = dataset.unbatch()
+                dataset = dataset.shuffle(buffer_size=100 * n)
+                dataset = dataset.batch(n)
+                iterator = dataset.make_one_shot_iterator()
+                x = model.sesh.run(iterator.get_next())
+                if isinstance(x, tuple):
+                    x = x[0]  # get the bout
+            else:
+                x, *_ = dataset.next_batch(n)
+            x_reconstructed = model.vae(x)
+            if tf_summary:
+                if name == 'train':
+                    tf_summary = model.train_writer_dir
+                elif name == 'validation':
+                    tf_summary = model.validation_writer_dir
+
+            plotSubset(model, x, x_reconstructed, n=n, name=name,
+                       tf_summary=tf_summary, save_png=save_png,
+                       show_plot=show_plot, transform_data=transform_data,
+                       transform_kwargs=transform_kwargs)
 
 def plotInLatent(model, x_in, labels=[], range_=None, title=None,
                  save=True, name="data", outdir="."):
@@ -242,7 +292,7 @@ def morph(model, zs, n_per_morph=10, loop=True, save_png=None, show_plot=False,
         xs_reconstructed = model.decode(zs_morph)
         all_xs.extend(xs_reconstructed)
         num_rows += 1
-    all_xs = np.stack(all_xs)
+    #all_xs = np.stack(all_xs)
 
     if tf_summary or save_png or show_plot:
         if grid_dims == None:
@@ -277,9 +327,10 @@ def _create_grid_image(images, name, grid_dims=None, tf_summary=None, model=None
             dim = int(np.ceil(np.sqrt(num_images)))
             grid_dims = (dim, dim)
 
+        # turn images into pixel range [0, 255]
+        #images = image_normalization(images, ubound=255)
         # convert morphs into a single grid image
         grid = convert_into_grid(images, grid_dims=grid_dims)
-        assert 0 <= grid.max() <= 1
         assert grid.ndim == 3
         grid = grid.reshape([1, *grid.shape])
 
@@ -454,3 +505,185 @@ def plot_accuracies(accuracy_file, sort_by=None, index=None, kind='barh',
             plt.savefig(save_figure)
         elif show_figure:
             plt.show()
+
+def fig2rgb_array(fig, expand=False):
+    fig.canvas.draw()
+    buf = fig.canvas.tostring_rgb()
+    ncols, nrows = fig.canvas.get_width_height()
+    shape = (nrows, ncols, 3) if not expand else (1, nrows, ncols, 3)
+    return np.fromstring(buf, dtype=np.uint8).reshape(shape)
+
+def plot_bout(bout, to_rad_transform=None, bout_len=None, cumsum=True,
+              ylim=None, linewidth=1, alpha=0.5, savefig=None,
+              figsize=(8, 2), cut_vertical=False, show_plot=False,
+              remove_ticks=False):
+    '''
+    Create rgb array of plotted bout fragments over time for all fragments.
+
+    Parameters
+    ----------
+    bout : ndarray
+        A single bout of shape (num_fragments, num_frames), (num_fragments,
+        num_frames, 1) or (1, num_fragments, num_frames, 1).
+    to_rad_transform : tuple, optional
+        If given, use to compute Pi in bouts representation and set plot ylim
+        to (-Pi, Pi).
+    bout_len : int, optional
+        If given, set plot xlim to (0, bout_len).
+    ylim : tuple, optional
+        Plot y limit in multiples of Pi.
+
+    Returns
+    -------
+    '''
+    import seaborn as sns
+    sns.set_style('white')
+    #sns.set_context('paper')
+    #sns.set_palette("hls", 8)
+    if bout.ndim == 4:
+        assert bout.shape[0] == bout.shape[3] == 1
+        bout = bout.reshape(bout.shape[1:3])
+    elif bout.ndim == 3:
+        assert bout.shape[2] == 1
+        bout = bout.reshape(bout.shape[0:2])
+    else:
+        assert bout.ndim == 2
+
+    if bout.shape[0] <= 8:
+        bout = bout.T
+    assert bout.shape[1] <= 8
+
+    if ylim is None:
+        if cumsum:
+            ylim = (-5, 5)
+        else:
+            ylim = (-1, 1)
+    else:
+        assert len(ylim) == 2
+
+    #print('PLOT CALL before rescaling bout mean', bout.mean(), 'std', bout.std(), 'max', bout.max(), 'min', bout.min())
+    if to_rad_transform is not None:
+        scale, shift = to_rad_transform
+        bout *= scale
+        bout += shift
+    #print('PLOT CALL after rescaling bout mean', bout.mean(), 'std', bout.std(), 'max', bout.max(), 'min', bout.min())
+
+    # Pi in data representation
+    fig = plt.figure(figsize=figsize)
+    ax = fig.add_subplot(111)
+    if cumsum:
+        bout = bout.cumsum(axis=1)[:, ::-1]
+    ax.plot(bout, alpha=alpha, linewidth=linewidth)
+    lw = linewidth / 2
+    pi_magnitude = np.pi
+    zero = 0
+    #if to_rad_transform is not None:
+    #    scale, shift = to_rad_transform
+    #    pi_magnitude = np.pi / scale
+    #    zero = - shift / scale
+    ymin = zero - ylim[0] * pi_magnitude
+    ymax = zero - ylim[1] * pi_magnitude
+    #print('ymin', ymin, 'ymax', ymax)
+    ax.set_ylim((ymin, ymax))
+    ax.axhline(lw=lw, c='k', linestyle='--', y=zero - pi_magnitude)
+    ax.axhline(lw=lw, c='k', linestyle='--', y=zero - 0.5 * pi_magnitude)
+    ax.axhline(lw=lw, c='k', linestyle='--', y=zero)
+    ax.axhline(lw=lw, c='k', linestyle='--', y=zero + 0.5 * pi_magnitude)
+    ax.axhline(lw=lw, c='k', linestyle='--', y=zero + pi_magnitude)
+    if bout_len is not None:
+        ax.set_xlim(0, bout_len)
+    max_x = ax.get_xlim()[1]
+    for x in range(0, int(max_x), 50):
+        ax.axvline(lw=lw, c='k', linestyle='--', x=x)
+    if remove_ticks:
+        ax.tick_params(
+            axis='both',       # changes apply to the x-  and y-axis
+            which='both',      # both major and minor ticks are affected
+            bottom='off',
+            labelbottom='off',
+            left='off',
+            labelleft='off')
+        # remove margins
+        fig.subplots_adjust(left=0, right=1, top=1, bottom=0)
+
+    if show_plot:
+        plt.show()
+
+    if savefig is not None:
+        plt.savefig(savefig)
+
+    return fig
+
+def plot_bout_as_rgb(bout, cut_vertical=False, show_plot=False, **plot_kwargs):
+    '''
+    Create rgb array of plotted bout fragments over time for all fragments.
+
+    Parameters
+    ----------
+    bout : ndarray
+        A single bout of shape (num_fragments, num_frames), (num_fragments,
+        num_frames, 1) or (1, num_fragments, num_frames, 1).
+    cut_vertical : bool, optional
+        If True, cut the rgb array vertically and stack the result horizonally.
+        If (width : height) ratio is (4 : 1), the resulting 2D array will be
+        square.
+    show_plot : bool, optional
+        If True, show the created plot.
+    **plot_kwargs
+        Keyword arguments passed to `plot_bout` method.
+
+    Returns
+    -------
+    ndarray
+        3D array of shape (height, width, 3) with RGB values in the last
+        dimension.
+    '''
+    if cut_vertical and to_rad_transform is None:
+        print("WARNING: `cut_vertical` set without `to_rad_transform`. This might look shit.")
+
+    fig = plot_bout(bout, show_plot=show_plot, **plot_kwargs)
+    # to_rad_transform=None, bout_len=None, ylim=None, linewidth=3, alpha=0.5, figsize=(8, 2)
+
+    rgb_array = fig2rgb_array(fig)
+    plt.close(fig)
+
+    if cut_vertical:
+        width = rgb_array.shape[1]
+        # Note: if width % 2 != 0, we loose the last pixel column (but who cares)
+        half = int(width/2)
+        first = rgb_array[:, :half]
+        second = rgb_array[:, half:]
+        # black vertical line
+        idx = int(lw)
+        if idx == 0:
+            idx = 1
+        first[-idx:] = np.zeros((idx, *first.shape[1:]))
+        second[:idx] = np.zeros((idx, *second.shape[1:]))
+        rgb_array = np.vstack([first, second])
+
+    return rgb_array
+
+def convert_bout_data_to_rgb_plots(bouts, bout_len, to_rad_transform,
+                                   max_px, **kwargs):
+    assert bouts.ndim == 4
+    results = []
+    resize_print = False
+    print('convert bouts transform', to_rad_transform)
+    print('converting plots into rgb arrays ...')
+    for n, bout in enumerate(bouts):
+        rgb = plot_bout_as_rgb(bout, cut_vertical=True, bout_len=bout_len,
+                               to_rad_transform=to_rad_transform,
+                               ylim=0.5 * np.array([-np.pi, np.pi]),
+                               figsize=(8,2), alpha=0.5, linewidth=3,
+                               remove_ticks=True, **kwargs)
+        assert rgb.shape[0] == rgb.shape[1], 'rgb image not square'
+        if n % 10 == 0:
+            print('converted {}/{} plots'.format(n + 1, bouts.shape[0]))
+        if rgb.shape[0] > max_px:
+            rgb = cv2.resize(rgb, (max_px, max_px), interpolation=cv2.INTER_LINEAR)
+            if not resize_print:
+                print('resizing from {} to {} px'.format(rgb.shape[0], max_px))
+                resize_print = True
+        results.append(rgb)
+    results = np.stack(results)
+    return results

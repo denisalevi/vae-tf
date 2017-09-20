@@ -18,14 +18,18 @@
 import random
 import os
 import time
+import collections
+from tqdm import tqdm
 
 import numpy as np
 import pandas as pd
 from six.moves import xrange  # pylint: disable=redefined-builtin
 
-from tensorflow.contrib.learn.python.learn.datasets import base
+import tensorflow as tf
 from tensorflow.python.framework import dtypes
+from tensorflow.contrib.data.python.ops.dataset_ops import BatchDataset, PaddedBatchDataset
 
+Datasets = collections.namedtuple('Datasets', ['train', 'validation', 'test', 'metadata'])
 
 def dense_to_one_hot(labels_dense, num_classes):
     """Convert class labels from scalars to one-hot vectors."""
@@ -35,6 +39,147 @@ def dense_to_one_hot(labels_dense, num_classes):
     labels_one_hot.flat[index_offset + labels_dense.ravel()] = 1
     return labels_one_hot
 
+def _bytes_feature(value):
+    return tf.train.Feature(bytes_list=tf.train.BytesList(value=[value]))
+
+def _int64_feature(value):
+    return tf.train.Feature(int64_list=tf.train.Int64List(value=[value]))
+
+def _float_feature(value):
+    return tf.train.Feature(float_list=tf.train.FloatList(value=[value]))
+
+def convert_to_tfrecords(filename, bouts, marques_labels, experiment_ids,
+                         test=0, validation=0):#, zero=None):
+    num_bouts = len(bouts)
+    assert num_bouts == len(marques_labels) == len(experiment_ids)
+
+    assert 0 <= test < 1, '`test` must be a fraction in [0, 1)'
+    assert 0 <= validation < 1, '`validation` must be a fraction in [0, 1)'
+    assert validation + test < 1
+
+    test_size = int(num_bouts * test)
+    validation_size = int(num_bouts * validation)
+    train_size = num_bouts - (test_size + validation_size)
+
+    print('Splitting dataset in {} train examples ({}), {} test examples ({}) and {} validation examples ({})'
+          .format(train_size, 1 - (test+validation), test_size, test, validation_size, validation))
+
+    idxs_list = list(range(num_bouts))
+    random.shuffle(idxs_list)
+    train_idxs = idxs_list[:train_size]
+    test_idxs = idxs_list[train_size:train_size + test_size]
+    validation_idxs = idxs_list[train_size + test_size:]
+
+    filenames = [filename + '.train.tfrecord',
+                 filename + '.test.tfrecord',
+                 filename + '.validation.tfrecord']
+    split_idxs = [train_idxs, test_idxs, validation_idxs]
+
+    for filename, idxs in zip(filenames, split_idxs):
+        print('Writing TFRecord file {} ...'.format(filename))
+        start = time.time()
+        writer = tf.python_io.TFRecordWriter(filename)
+        for i in tqdm(idxs):
+            bout = bouts[i]
+            assert bout.ndim == 4
+            assert bout.shape[0] == bout.shape[3] == 1
+            num_tail_fragments = bout.shape[1]
+            num_frames = bout.shape[2]
+            bout_raw = bout.reshape((num_tail_fragments, num_frames)).tostring()
+            example = tf.train.Example(features=tf.train.Features(feature={
+                #'zero': _float_feature(zero),  # zero angle in scaled dataset
+                #'id': _int64_feature(i),  # unique bout ID
+                'fragments': _int64_feature(num_tail_fragments),
+                'frames': _int64_feature(num_frames),
+                'marques_label': _int64_feature(marques_labels[i]),
+                'experiment_id': _int64_feature(experiment_ids[i]),
+                'bout_raw': _bytes_feature(bout_raw)
+            }))
+            writer.write(example.SerializeToString())
+        writer.close()
+        print('... took {}s'.format(time.time() - start))
+    return split_idxs
+
+def _read_and_decode_tfrecord(serialized_example):
+    
+    features = tf.parse_single_example(
+        serialized_example,
+        features={
+            #'zero': tf.FixedLenFeature([], tf.float32),  # zero angle in scaled dataset
+            #'id': tf.FixedLenFeature([], tf.int64)
+            'fragments': tf.FixedLenFeature([], tf.int64),
+            'frames': tf.FixedLenFeature([], tf.int64),
+            'marques_label': tf.FixedLenFeature([], tf.int64),
+            'experiment_id': tf.FixedLenFeature([], tf.int64),
+            'bout_raw': tf.FixedLenFeature([], tf.string),
+        })
+
+    bout = tf.decode_raw(features['bout_raw'], tf.float32)
+    
+    fragments = tf.cast(features['fragments'], tf.int32)
+    frames = tf.cast(features['frames'], tf.int32)
+    #zero = tf.cast(features['zero'], tf.float32)
+    marques_label = tf.cast(features['marques_label'], tf.int32)
+    experiment_id = tf.cast(features['experiment_id'], tf.int32)
+    
+    bout_shape = tf.stack([fragments, frames, 1])
+    
+    bout = tf.reshape(bout, bout_shape)
+    
+    return bout, marques_label, experiment_id
+
+def pad_bouts(bouts, bout_len, pad_value=0, out=None, testing=False, dtype=np.float32):
+    '''
+    Turn list of 3D bout arrays into same shaped 4D bouts array.
+
+    Parameters
+    ----------
+    bouts : list
+        List of potentially differently shaped bouts.
+    bout_len : int
+        Value to pad bouts to.
+    pad_value : int, optional
+        Value to pad bouts with. Default is 0.
+    out : ndarray, optional
+        Array to store resulting 4D array in.
+    testing : bool, optional
+        If True, create np.nan array and check if everything was filled. I False,
+        create np.empty array.
+
+    Returns
+    -------
+    ndarray
+        If out is None, return resulting 4D bouts array.
+    '''
+    num_bouts = len(bouts)
+    bouts_shape = (num_bouts, 8, bout_len, 1)
+    if out is None:
+        if testing:
+            padded_bouts = np.nan * np.ones(bouts_shape, dtype=dtype)
+        else:
+            padded_bouts = np.empty(bouts_shape, dtype=dtype)
+    else:
+        assert padded_bouts.shape == bouts_shape
+        padded_bouts = out
+
+    for i, bout in tqdm(enumerate(bouts), total=num_bouts):
+        bout = bouts[i]
+        assert bout.ndim == 4
+        assert bout.shape[0] == bout.shape[3] == 1
+        assert bout.shape[1] == 8
+        pad_len = bout_len - bout.shape[2]
+        bout = np.lib.pad(bout,
+                          pad_width=((0, 0), (0, 0), (0, pad_len), (0, 0)),
+                          mode='constant',
+                          constant_values=pad_value)
+        assert bout.shape[2] == bout_len
+        if testing:
+            assert np.all(np.isnan(padded_bouts[i, ...]))
+        padded_bouts[i, ...] = bout
+    if testing:
+        assert not np.any(np.isnan(padded_bouts))
+    if out is None:
+        return padded_bouts
 
 def extract_bouts_and_labels(f, experiments, max_bout_len, padding, create_df=False,
                              max_bout_angle=None, discard_large_angles=None,
@@ -141,6 +286,9 @@ def extract_bouts_and_labels(f, experiments, max_bout_len, padding, create_df=Fa
     # dataset recorded 8 tail fragments
     num_tail_fragments = 8
 
+    if max_tail_frags is None:
+        max_tail_frags = num_tail_fragments
+
     if max_tail_frags > num_tail_fragments:
         raise ValueError("`max_tail_frags` ({}) is larger then available tail fragments ({})"
                          .format(max_tail_frags, num_tail_fragments))
@@ -190,7 +338,7 @@ def extract_bouts_and_labels(f, experiments, max_bout_len, padding, create_df=Fa
                 max_bout_len = max_bout_len_this_exp
 
     # PREPARE NUMPY ARRAY FOR BOUT DATA
-    print('INFO total num bouts: {}, number of frames: {}, bout length: {}'
+    print('INFO total num bouts: {}, number of tail fragments: {}, max bout length: {}'
           .format(num_bouts, max_tail_frags, max_bout_len))
     num_bytes = 2 if bout_dtype == np.int16 else 4
     if padding:
@@ -270,7 +418,7 @@ def extract_bouts_and_labels(f, experiments, max_bout_len, padding, create_df=Fa
             # we have 8 angles per frame, -1 infers number of frames from array len
             bout_frames = bout[2:].reshape((num_tail_fragments, -1))
             if max_tail_frags < num_tail_fragments:
-                bout_frames = bout_frames[:max_tail_frags + 1, :]
+                bout_frames = bout_frames[:max_tail_frags, :]
             if not padding:
                 if bout_idx_this_exp != 0:
                     assert bout_frames.shape[1] == exp_start_idx[bout_idx_this_exp] - exp_start_idx[bout_idx_this_exp-1]
@@ -295,7 +443,8 @@ def extract_bouts_and_labels(f, experiments, max_bout_len, padding, create_df=Fa
             if discard_large_angles is not None:
                 if discard_large_angles == 'delete_bout':
                     max_angle = bout_frames.max()
-                    if max_angle * int16_to_rad_factor > max_bout_angle:
+                    min_angle = bout_frames.min()
+                    if max_angle * int16_to_rad_factor > max_bout_angle or np.abs(min_angle) * int16_to_rad_factor > max_bout_angle:
                         modified_bout_indices['max_angle'].append((exp_id, i_bout))
                         num_deleted_bouts += 1
                         if not padding:
@@ -311,6 +460,7 @@ def extract_bouts_and_labels(f, experiments, max_bout_len, padding, create_df=Fa
                         continue
 
                 elif discard_large_angles == 'delete_fragments':
+                    raise NotImplementedError("Fix this for not only positive max angle but abs(min_angle) too, see `delete_bout` section above")
                     max_angle_idx = np.unravel(bout_frames.argmax(), bout_frames.shape)
                     max_angle = bout_frames[max_angle_idx]
                     if max_angle * int16_to_rad_factor > max_bout_angle:
@@ -606,7 +756,10 @@ def read_data_sets(data_archive,
                    reshape=True,
                    test_fraction=0.1,
                    validation_fraction=0.05,
-                   seed=None):
+                   seed=None,
+                   tfrecords=False,
+                   read_threads=2,
+                   buffer_size=10000):
     '''
     Load bout data from `.npz` archive into Datasets object.
 
@@ -654,6 +807,10 @@ def read_data_sets(data_archive,
         Set the seed for partitioning the data into train, test and validation
         set (for reproducibility). If None (default), a random seed is chosen
         and the partitioning is different for each run.
+    tfrecords: bool, optional
+        If True, load data from `data_archiv.test.tfrecord`,
+        `data_archiv.test.tfrecord`, `data_archiv.test.tfrecord` when needed.
+        If False (default), all data is loaded to memory.
 
     Returns
     -------
@@ -669,113 +826,172 @@ def read_data_sets(data_archive,
         train = fake()
         validation = fake()
         test = fake()
-        return base.Datasets(train=train, validation=validation, test=test)
+        return Datasets(train=train, validation=validation, test=test, metadata=None)
 
-    if not os.path.splitext(data_archive)[1] == '.npz':
+    data_name, ext = os.path.splitext(data_archive)
+    if not ext == '.npz':
         raise ValueError('Expected .npz file for data_archive, got {}'
                          .format(data_archive))
 
-    if not 0 <= validation_fraction + test_fraction <= 1:
-        raise ValueError(
-            'Sum of validation and test fraction should be between 0 and 1. '
-            'Received: {} and {}.'.format(validation_fraction, test_fraction))
-    
-    assert isinstance(mmap, bool)
-    if mmap:
-        mmap_mode = 'r'
-    else:
-        mmap_mode = None
-
-    print("Loading dataset ...")
+    print("Loading .npz data ...")
     start = time.time()
     # NpZFile object (data is not loaded to memory yet)
-    with np.load(data_archive, mmap_mode=mmap_mode) as data:
-        bouts = data['bouts']
-        marques_labels = data['marques_label']
-        experiment_ids = data['experiment_id']
+    with np.load(data_archive) as data:
+        if not tfrecords:
+            bouts = data['bouts']
+        #marques_labels = data['marques_label']
+        #experiment_ids = data['experiment_id']
+        #train_bouts = data['train_bouts']
+        #validation_bouts = data['validation_bouts']
+        #test_bouts = data['test_bouts']
         experiment_id_name_lookup = data['experiment_id_name_lookup'].item()
         marques_label_name_lookup = data['marques_label_name_lookup'].item()
-        int16_to_rad_factor = data['int16_to_rad_factor']
+        to_rad_transform = data['to_rad_transform']
     print("... took {} s".format(time.time() - start))
 
-    num_bouts = bouts.shape[0]
+    if tfrecords:  # create Dataset from tfrecords
+        print('Creating TFRecordDataset objects ...')
+        start = time.time()
+        datasets = {}
+        for name in ['train', 'test', 'validation']:
+            filename = '{}.{}.tfrecord'.format(data_name, name)
+            assert os.path.exists(filename), "couldn't find {} file".format(filename)
+            print('file', filename)
+            dataset = tf.contrib.data.TFRecordDataset(filename)
+            dataset = dataset.map(_read_and_decode_tfrecord, num_threads=read_threads,
+                                  output_buffer_size=buffer_size)
+            datasets[name] = dataset
+        print('... took {} s'.format(time.time() - start))
+                      
+    else:  # create Dataset from bouts loaded to memory from .npz archive
+        if not 0 <= validation_fraction + test_fraction <= 1:
+            raise ValueError(
+                'Sum of validation and test fraction should be between 0 and 1. '
+                'Received: {} and {}.'.format(validation_fraction, test_fraction))
+        
+        assert isinstance(mmap, bool)
+        if mmap:
+            mmap_mode = 'r'
+        else:
+            mmap_mode = None
 
-    # TODO create data with split train and test part and avoid shuffling
-    print("Shuffeling the data ...")
-    start = time.time()
-    np.random.seed(seed)
-    perm = np.arange(num_bouts)
-    np.random.shuffle(perm)
-    bouts = bouts[perm]
-    marques_labels = marques_labels[perm]
-    experiment_ids = experiment_ids[perm]
-    print("... took {} s".format(time.time() - start))
+        print("Loading dataset ...")
+        start = time.time()
+        # NpZFile object (data is not loaded to memory yet)
+        with np.load(data_archive, mmap_mode=mmap_mode) as data:
+            bouts = data['bouts']
+            #marques_labels = data['marques_label']
+            #experiment_ids = data['experiment_id']
+            #train_bouts = data['train_bouts']
+            #validation_bouts = data['validation_bouts']
+            #test_bouts = data['test_bouts']
+            experiment_id_name_lookup = data['experiment_id_name_lookup'].item()
+            marques_label_name_lookup = data['marques_label_name_lookup'].item()
+            to_rad_transform = data['to_rad_transform']
+        print("... took {} s".format(time.time() - start))
 
-    test_size = int(num_bouts * test_fraction)
-    validation_size = int(num_bouts * validation_fraction)
-    train_size = num_bouts - (validation_size + test_size)
+        assert bouts is not None, '{} has no save bout data'.format(data_archive)
+        num_bouts = bouts.shape[0]
 
-    print('Splitting bout data into {} train ({}%), {} test ({}%) and {} ({}%) '
-          'validation samples'.format(train_size,
-                                      100 - (test_fraction + validation_fraction) * 100,
-                                      test_size, test_fraction * 100,
-                                      validation_size, validation_fraction * 100))
+        # TODO create data with split train and test part and avoid shuffling
+        print("Shuffeling the data ...")
+        start = time.time()
+        np.random.seed(seed)
+        perm = np.arange(num_bouts)
+        np.random.shuffle(perm)
+        bouts = bouts[perm]
+        #marques_labels = marques_labels[perm]
+        #experiment_ids = experiment_ids[perm]
+        print("... took {} s".format(time.time() - start))
 
-    test_bouts = bouts[:test_size]
-    test_marques_labels = marques_labels[:test_size]
-    test_experiment_ids = experiment_ids[:test_size]
-    validation_bouts = bouts[test_size:test_size + validation_size]
-    validation_marques_labels = marques_labels[test_size:test_size + validation_size]
-    validation_experiment_ids = experiment_ids[test_size:test_size + validation_size]
-    train_bouts = bouts[test_size + validation_size:]
-    train_marques_labels = marques_labels[test_size + validation_size:]
-    train_experiment_ids = experiment_ids[test_size + validation_size:]
-    assert train_bouts.shape[0] == train_size
+        test_size = int(num_bouts * test_fraction)
+        validation_size = int(num_bouts * validation_fraction)
+        train_size = num_bouts - (validation_size + test_size)
 
-    train = DataSet(train_bouts, experiment_ids=train_experiment_ids,
-                    marques_labels=train_marques_labels, dtype=dtype, reshape=reshape,
-                    experiment_id_name_lookup=experiment_id_name_lookup,
-                    marques_label_name_lookup=marques_label_name_lookup,
-                    int16_to_rad_factor=int16_to_rad_factor)
-    validation = DataSet(validation_bouts, experiment_ids=validation_experiment_ids,
-                         marques_labels=validation_marques_labels, dtype=dtype,
-                         reshape=reshape, experiment_id_name_lookup=experiment_id_name_lookup,
-                         marques_label_name_lookup=marques_label_name_lookup,
-                         int16_to_rad_factor=int16_to_rad_factor)
-    test = DataSet(test_bouts, experiment_ids=test_experiment_ids,
-                   marques_labels=test_marques_labels, dtype=dtype, reshape=reshape,
-                   experiment_id_name_lookup=experiment_id_name_lookup,
-                   marques_label_name_lookup=marques_label_name_lookup,
-                   int16_to_rad_factor=int16_to_rad_factor)
-    
-    return base.Datasets(train=train, validation=validation, test=test)
+        print('Splitting bout data into {} train ({}%), {} test ({}%) and {} ({}%) '
+              'validation samples'.format(train_size,
+                                          100 - (test_fraction + validation_fraction) * 100,
+                                          test_size, test_fraction * 100,
+                                          validation_size, validation_fraction * 100))
+
+        test_bouts = bouts[:test_size]
+        #test_marques_labels = marques_labels[:test_size]
+        #test_experiment_ids = experiment_ids[:test_size]
+        validation_bouts = bouts[test_size:test_size + validation_size]
+        #validation_marques_labels = marques_labels[test_size:test_size + validation_size]
+        #validation_experiment_ids = experiment_ids[test_size:test_size + validation_size]
+        train_bouts = bouts[test_size + validation_size:]
+        #train_marques_labels = marques_labels[test_size + validation_size:]
+        #train_experiment_ids = experiment_ids[test_size + validation_size:]
+        assert train_bouts.shape[0] == train_size
+
+        print('Dataset objects ...')
+        start = time.time()
+        datasets = {}
+        datasets['train'] = tf.contrib.data.Dataset.from_tensor_slices(train_bouts)
+        datasets['test'] = tf.contrib.data.Dataset.from_tensor_slices(test_bouts)
+        datasets['validation'] = tf.contrib.data.Dataset.from_tensor_slices(validation_bouts)
+        print('... took {} s'.format(time.time() - start))
+
+        
+        #train = DataSet(train_bouts, experiment_ids=train_experiment_ids,
+        #                marques_labels=train_marques_labels, dtype=dtype, reshape=reshape,
+        #                experiment_id_name_lookup=experiment_id_name_lookup,
+        #                marques_label_name_lookup=marques_label_name_lookup,
+        #                int16_to_rad_factor=int16_to_rad_factor)
+        #validation = DataSet(validation_bouts, experiment_ids=validation_experiment_ids,
+        #                     marques_labels=validation_marques_labels, dtype=dtype,
+        #                     reshape=reshape, experiment_id_name_lookup=experiment_id_name_lookup,
+        #                     marques_label_name_lookup=marques_label_name_lookup,
+        #                     int16_to_rad_factor=int16_to_rad_factor)
+        #test = DataSet(test_bouts, experiment_ids=test_experiment_ids,
+        #               marques_labels=test_marques_labels, dtype=dtype, reshape=reshape,
+        #               experiment_id_name_lookup=experiment_id_name_lookup,
+        #               marques_label_name_lookup=marques_label_name_lookup,
+        #               int16_to_rad_factor=int16_to_rad_factor)
+        
+        #return Datasets(train=train, validation=validation, test=test)
+
+    datasets['to_rad_transform'] = tuple(to_rad_transform)
+    datasets['experiment_id_lookup'] = experiment_id_name_lookup
+    datasets['marques_label_lookup'] = marques_label_name_lookup
+    return datasets
+
 
 
 def load_bouts(data_archive, reshape=False, **kwargs):
     return read_data_sets(data_archive, reshape=reshape, **kwargs)
 load_bouts.__doc__ = read_data_sets.__doc__
-# TODO signature is missing (for default values)
+# todo signature is missing (for default values)
 
 
-def get_bout(n, bout_data, label_type, dataset='train'):
-    """Returns flat ndarray for random bout with label n of given label_type"""
+def get_bout(n, bout_data, label_type, dataset='train', return_handle=False):
+    """returns 3D ndarray or operation to create iterator (has to be run in a session) 
+    handle for random bout with label n of given label_type"""
     if label_type not in ['marques_classification', 'experiment_id']:
         raise ValueError('`label_type` has to be one of ["marques_classification", '
                          '"experiment_id"], got {}'.format(label_type))
 
-    data = getattr(bout_data, dataset)
-    SIZE = 500
-    for _ in range(int(np.ceil(data.num_examples / SIZE))):
-        bouts, marques_labels, experiment_ids = data.next_batch(SIZE)
-        if label_type == 'marques_classification':
-            labels = marques_labels
-        elif label_type == 'experiment_id':
-            labels = experiment_ids
-        idxs = iter(random.sample(range(SIZE), SIZE)) # non-in-place shuffle
+    dataset = bout_data[dataset]
+    if isinstance(dataset, (BatchDataset, PaddedBatchDataset)):
+        dataset = dataset.unbatch()
 
-        for i in idxs:
-            if labels[i] == n:
-                return bouts[i] # first match
+    if label_type == 'marques_classification':
+        dataset = dataset.filter(lambda bout, mar_label, exp_id: tf.equal(n, mar_label))
+    elif label_type == 'experiment_id':
+        dataset = dataset.filter(lambda bout, mar_label, exp_id: tf.equal(n, exp_id))
 
-    raise ValueError('label {} of label type {} not found in {} dataset'
-                     .format(n, label_type, dataset))
+    iterator = dataset.make_one_shot_iterator()
+
+    if return_handle:
+        return iterator.string_handle()
+
+    with tf.Session() as sess:
+        try:
+            bout, label = sess.run(iterator.get_next())
+        except tf.errors.OutOfRangeError as err:
+            raise tf.errors.OutOfRangeError('label {} of label type {} not found in {} dataset ({})'
+                                            .format(n, label_type, dataset, err))
+    
+    assert label == n
+    return bout

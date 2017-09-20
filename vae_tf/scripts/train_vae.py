@@ -31,7 +31,8 @@ HYPERPARAMS = {
     "nonlinearity": tf.nn.elu,
     "squashing": tf.nn.sigmoid,
     "beta": 1.0,
-    "img_dims": (28, 28)
+    "img_dims": (28, 28),
+    "data_range": (0, 1)
 }
 
 IMG_DIMS = HYPERPARAMS['img_dims']

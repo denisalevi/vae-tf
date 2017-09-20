@@ -75,9 +75,13 @@ def standardize_by_entire_dataset(bouts, return_transforms=False):
     assert bouts.ndim == 4
     mean = np.nanmean(bouts)
     std = np.nanstd(bouts)
+    assert np.isscalar(mean)
+    assert np.isscalar(std)
     scale = 1. / std
     shift = - mean / std
     # use in-place operations to save memory
+    print('STD', std, '1/STD', scale)
+    print('MEAN', mean, '-MEAN/STD', shift)
     bouts *= scale
     bouts += shift
     if return_transforms:

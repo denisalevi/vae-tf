@@ -60,12 +60,31 @@ def images_to_sprite(data, invert=False):
     return data
 
 def random_subset(images, size, labels=None, same_num_labels=False):
-    """random_subset returns a shuffled random subset of size size from dataset
+    '''
+    Return a shuffled random subset of size size from dataset
 
-    :param dataset: tensorflow.contrib.learn.python.learn.datasets.mnist.DataSet object
-    :param size: int, size of subset
-    :param same_num_labels: bool, weather to return equal number of sampels per label
-    """
+    Parameters
+    ----------
+    images : ndarray or DataSet object
+        4D array with first being the number of images
+    size : int
+        size of subset
+    labels : ndarray, optional
+        Array of labels to create subset from. If array is 2D, it has to have
+        shape (num_images, num_labels) as for each label the subset is
+        returned. If `same_num_labels` it True, the first label `labels[:, 0]`
+        will be used to split the dataset.
+    same_num_labels : bool, optional
+        weather to return equal number of sampels per label
+
+    Returns
+    -------
+    images_subset : ndarray
+        The subset of images.
+    labels_subset : ndarray
+        The subset of labels with same shape as `labels` or an empty list if
+        `labels` is None.
+    '''
     assert labels is not None or not same_num_labels, 'no labels given for same_num_labels==True'
     new_labels = []
     if same_num_labels:
@@ -79,14 +98,21 @@ def random_subset(images, size, labels=None, same_num_labels=False):
         remainder = size - subset_per_label * unique_labels.size
         new_images = []
         for n, label in enumerate(unique_labels):
-            label_images = images[split_labels == label]
+            mask = split_labels == label
+            label_images = images[mask]
             label_size = subset_per_label + 1 if n < remainder else subset_per_label
-            perm = np.arange(label_images.shape[0])
+            num_images = label_images.shape[0]
+            if num_images < label_size:
+                size -= label_size - num_images
+                label_size = num_images
+                print('random_subset: Not enough images with label {}, reducing number per label to {}'.
+                      format(label, label_size))
+            perm = np.arange(num_images)
             np.random.shuffle(perm)
             label_subset = perm[:label_size]
             new_images.append(label_images[label_subset])
             #new_labels.append([label] * label_size)
-            new_label = labels[split_labels == label]
+            new_label = labels[mask]
             new_labels.append(new_label[label_subset])
         perm = np.arange(size)
         np.random.shuffle(perm)
@@ -208,14 +234,14 @@ def fc_or_conv_arg(string):
     raise argparse.ArgumentTypeError(msg)
 
 # Adapted from https://github.com/InFoCusp/tf_cnnvis/blob/master/tf_cnnvis/utils.pyp
-def convert_into_grid(Xs, padding=1, grid_dims=None):
+def convert_into_grid(Xs, padding=1, grid_dims=None, normalize=False):
     '''
     Convert 4-D numpy array into a grid image
 
     Parameters
     ----------
     Xs : ndarray
-        4D array of images to make grid out of it
+        4D array of images to make grid out of it (pixels in range [0, 255])
     padding : int, optional
         padding size between grid cells
     grid_dims : list, optional
@@ -227,28 +253,53 @@ def convert_into_grid(Xs, padding=1, grid_dims=None):
         3D array, grid of input images, shape (grid_height, grid_width,
         channels)
     '''
-    (N, H, W, C) = Xs.shape
-    if grid_dims is None:
-        grid_size_h = grid_size_w = int(np.ceil(np.sqrt(N)))
-    else:
+    N = len(Xs)
+    H, W, C = Xs[0].shape
+    if all([x.shape == (H, W, C) for x in Xs]):
+        # same image shapes
+        if grid_dims is None:
+            grid_size_h = grid_size_w = int(np.ceil(np.sqrt(N)))
+        else:
+            assert len(grid_dims) == 2
+            grid_size_h, grid_size_w = grid_dims
+        H_list = [H] * N
+        W_list = [W] * N
+
+    else:  # not same image shapes
+        H_list = [x.shape[0] for x in Xs]
+        W_list = [x.shape[1] for x in Xs]
+        assert all([x.shape[2] == C for x in Xs]), 'images need to have same num channels'
+        assert grid_dims is not None, 'Need `grid_dims` if images have different dimensions'
         assert len(grid_dims) == 2
         grid_size_h, grid_size_w = grid_dims
-    grid_height = H * grid_size_h + padding * (grid_size_h - 1)
-    grid_width = W * grid_size_w + padding * (grid_size_w - 1)
+
+    grid_height = np.sum(H_list[:grid_size_h]) + padding * (grid_size_h - 1)
+    grid_width = np.sum(W_list[:grid_size_w]) + padding * (grid_size_w - 1)
     grid = np.ones((grid_height, grid_width, C))
     next_idx = 0
-    y0, y1 = 0, H
-    for y in range(grid_size_h):
-        x0, x1 = 0, W
-        for x in range(grid_size_w):
-            if next_idx < N:
-                grid[y0:y1, x0:x1] = Xs[next_idx]
-                next_idx += 1
-            x0 += W + padding
-            x1 += W + padding
-        y0 += H + padding
-        y1 += H + padding
-    return grid#.astype('uint8')
+    y0, y1 = 0, H_list[0]
+    for y_idx in range(grid_size_h):
+        x0, x1 = 0, W_list[next_idx]
+        for x_idx in range(grid_size_w):
+            assert next_idx < N, 'grid to small for all images'
+            grid[y0:y1, x0:x1] = Xs[next_idx]
+            next_idx += 1
+
+            if next_idx == N:
+                if normalize:
+                    grid = image_normalization(grid)
+                    grid = grid.astype('uint8')
+                return grid#.astype('uint8')
+
+            x0 += W_list[next_idx - 1] + padding
+            x1 += W_list[x_idx] + padding
+
+        y0 += H_list[next_idx - 1] + padding
+        y1 += H_list[next_idx] + padding
+
+    assert False, 'should have returned before..., y_idx={}, x_idx={}, next_idx={}, N={}'.format(y_idx, x_idx, next_idx, N)
+
+
 def _images_to_grid(images):
     """
     Convert a list of arrays of images into a list of grid of images
@@ -273,3 +324,25 @@ def _images_to_grid(images):
                 tmp[i] = images[i][j]
             grid_images.append(np.expand_dims(convert_into_grid(tmp), axis = 0))
     return grid_images
+
+# image or images normalization
+def image_normalization(image, s=0.1, ubound=255.0, eps=1e-7):
+    """
+    Min-Max image normalization. Convert pixle values in range [0, ubound]
+
+    :param image:
+        A numpy array to normalize
+        :type image: 3-D numpy array
+
+    :param ubound:
+        upperbound for a image pixel value
+        :type ubound: float (Default = 255.0)
+
+    :return:
+        A normalized image
+        :rtype: 3-D numpy array
+
+    """
+    img_min = np.min(image)
+    img_max = np.max(image)
+    return (((image - img_min) * ubound) / (img_max - img_min + eps)).astype('uint8')

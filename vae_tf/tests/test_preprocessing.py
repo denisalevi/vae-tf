@@ -15,9 +15,12 @@ from vae_tf.bout_helpers.preprocessing import (rescale_data, standardize_by_enti
 # choose some small dataset for testing
 DATADIR = '/home/denisalevi/projects/deep_learning_champalimaud/data/minExampleBoutFiles/boutFilesFinal_npz/one_exp_padded_300/bout_data.npz'
 
+def _random_data():
+    return (np.random.rand(5, 8, 100, 1) - 0.5) * 10
+
 def test_standardize_by_entire_data():
 
-    bouts = load_bouts(DATADIR).train.bouts.astype('float32')
+    bouts = _random_data()
     original = bouts.copy()
 
     scale, shift = standardize_by_entire_dataset(bouts, return_transforms=True)
@@ -29,7 +32,7 @@ def test_standardize_by_entire_data():
 
 def test_standardze_per_data_point():
 
-    bouts = load_bouts(DATADIR).train.bouts.astype('float32')
+    bouts = _random_data()
     original = bouts.copy()
 
     scales, shifts = standardize_per_data_point(bouts, return_transforms=True)
@@ -41,7 +44,7 @@ def test_standardze_per_data_point():
 
 def test_standardize_per_fragment_dimension():
 
-    bouts = load_bouts(DATADIR).train.bouts.astype('float32')
+    bouts = _random_data()
     original = bouts.copy()
 
     scales, shifts = standardize_per_fragment_dimension(bouts, return_transforms=True)
@@ -53,7 +56,7 @@ def test_standardize_per_fragment_dimension():
 
 def test_rescaling_data():
 
-    bouts = load_bouts(DATADIR).train.bouts.astype('float32')
+    bouts = _random_data()
     original = bouts.copy()
 
     scale, shift = rescale_data(bouts, return_transforms=True)
@@ -69,13 +72,13 @@ def test_rescaling_data():
 
 def test_calculate_reverse_transform():
 
-    bouts = load_bouts(DATADIR).train.bouts.astype('float32')
+    bouts = _random_data()
     original = bouts.copy()
 
     scale, shift = standardize_by_entire_dataset(bouts, return_transforms=True)
     scale2, shift2 = rescale_data(bouts, return_transforms=True)
     rev_scale, rev_shift = calculate_reverse_transform([scale, scale2], [shift, shift2])
-    assert_allclose(original, bouts * rev_scale + rev_shift, atol=1e-3)
+    assert_allclose(original, bouts * rev_scale + rev_shift)#, atol=1e-3)
 
 def test_extract_bouts_and_labels():
 
@@ -159,9 +162,9 @@ def test_extract_bouts_and_labels():
 
 
 if __name__ == '__main__':
-    #test_extract_bouts_and_labels()
-    #test_standardize_by_entire_data()
-    #test_standardze_per_data_point()
-    #test_standardize_per_fragment_dimension()
-    #test_rescaling_data()
+    test_extract_bouts_and_labels()
+    test_standardize_by_entire_data()
+    test_standardze_per_data_point()
+    test_standardize_per_fragment_dimension()
+    test_rescaling_data()
     test_calculate_reverse_transform()

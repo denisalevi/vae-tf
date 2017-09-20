@@ -132,7 +132,15 @@ else:
     beta = args.beta[0]
 
 if args.arch is None:
-    arch = str(arch_from_name[1:])
+    size = []
+    filt = []
+    stride = []
+#    for layer in arch_from_name[1:-1]:
+#        size.append(layer[0])
+#        filt.append(layer[1][0])
+#        stride.append(layer[2][0])
+#    arch = str(size) + ' F{}'.format(filt[0]) + ' S{}'.format(np.unique(stride)) + ' {}'.format(arch_from_name[-1])
+    arch = None
 else:
     arch = args.arch
 
@@ -295,9 +303,9 @@ for n in range(args.repeat):
 
     with open(savefile_single_runs, 'a') as log_file:
         txt = '{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(beta), args.comment,
-                                                        accuracy_clust_test_latent,
-                                                        accuracy_clust_train_latent,
-                                                        accuracy_clust_test_input)
+                                                            accuracy_clust_test_latent,
+                                                            accuracy_clust_train_latent,
+                                                            accuracy_clust_test_input)
         print('Saving single run clustering accuracies in {}'.format(savefile_single_runs))
         log_file.write(txt)
 
@@ -338,14 +346,18 @@ accuracy_clust_test_input_mean = np.mean(accuracy_clust_test_input_list)
 accuracy_clust_test_input_std = np.std(accuracy_clust_test_input_list)
 
 with open(savefile, 'a') as log_file:
-    mean_txt = '{}\t{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(beta), args.comment, 'mean', args.repeat,
-                                                                 accuracy_clust_test_latent_mean,
-                                                                 accuracy_clust_train_latent_mean,
-                                                                 accuracy_clust_test_input_mean)
+    mean_txt = '{}\t{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(
+        str(arch), str(beta), args.comment, 'mean', args.repeat,
+        accuracy_clust_test_latent_mean,
+        accuracy_clust_train_latent_mean,
+        accuracy_clust_test_input_mean
+    )
     log_file.write(mean_txt)
-    std_txt = '{}\t{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(str(arch), str(beta), args.comment, 'std', args.repeat,
-                                                                 accuracy_clust_test_latent_std,
-                                                                 accuracy_clust_train_latent_std,
-                                                                 accuracy_clust_test_input_std)
+    std_txt = '{}\t{}\t{}\t{}\t{}\t{:.4f}\t{:.4f}\t{:.4f}\n'.format(
+        str(arch), str(beta), args.comment, 'std', args.repeat,
+        accuracy_clust_test_latent_std,
+        accuracy_clust_train_latent_std,
+        accuracy_clust_test_input_std
+    )
     log_file.write(std_txt)
     print('Saved mean and std of clustering accuracies in {}'.format(savefile))

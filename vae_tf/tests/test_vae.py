@@ -56,7 +56,8 @@ def test_mnist_example():
     tf.reset_default_graph()
     mnist = load_mnist()
     v = VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
-    v.train(mnist, max_iter=2, max_epochs=1, cross_validate_every_n=1,
+    v.train(mnist.train.images, max_iter=2, max_epochs=1, cross_validate_every_n=1,
+            validation_dataset=mnist.validation.images,
             verbose=False, save_final_state=True, plots_outdir=PLOTS_DIR,
             plot_latent_over_time=False, plot_subsets_every_n=1,
             save_summaries_every_n=1)
@@ -129,4 +130,5 @@ def test_architecture_model_naming_and_reloading():
     assert dims_reload3 is None
 
 if __name__ == '__main__':
-    test_architecture_model_naming_and_reloading()
+    #test_architecture_model_naming_and_reloading()
+    test_mnist_example()
