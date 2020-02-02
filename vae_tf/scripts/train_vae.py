@@ -138,7 +138,7 @@ if __name__ == "__main__":
                         help='Number of batches after which to stop training')
     parser.add_argument('--create_embedding', action='store_true',
                         help='Create an embedding of test data for TensorBoard')
-    parser.add_argument('--save_pngs', nargs='?', default=None, type=str, const=True, 
+    parser.add_argument('--save_pngs', nargs='?', default=None, type=str, const=True,
                         help='Save figures as pngs. Optionally pass target folder as argument.')
     args = parser.parse_args()
 
@@ -185,6 +185,14 @@ if __name__ == "__main__":
 
         # don't plot by default when reloading (--plot_all overwrites this)
         args.no_plots = True
+        if args.create_embedding:
+            subset_size = 1000
+            subset_images, subset_labels = random_subset(mnist.test.images, subset_size,
+                                                         labels=mnist.test.labels,
+                                                         same_num_labels=True)
+            model.create_embedding(subset_images, labels=subset_labels, label_names=None,
+                                   sample_latent=False, latent_space=True, input_space=True,
+                                   create_sprite=True, invert_sprite=False)
     else:  # train
         model = VAE(ARCHITECTURE, HYPERPARAMS, log_dir=LOG_DIR)
         model.train(mnist.train.images, validation_dataset=mnist.validation.images,
@@ -198,7 +206,7 @@ if __name__ == "__main__":
                                                          same_num_labels=True)
             model.create_embedding(subset_images, labels=subset_labels, label_names=None,
                                    sample_latent=False, latent_space=True, input_space=True,
-                                   create_sprite=True)
+                                   create_sprite=True, invert_sprite=False)
         meta_graph = model.final_checkpoint
 
     if not all(isinstance(layer, int) for layer in ARCHITECTURE):
